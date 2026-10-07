@@ -46,6 +46,7 @@ core/                  # logika tiap laporan (dipindah dari notebook)
   darkstore_ds.py        # Daily Performance DS + MTD DS Performance Delivery
   inventory_report.py    # Inventory, OOS, MAT, Store Performance
   mtd_performance.py     # Report Performance Darkstore MTD
+  mds_report.py          # Report Daily Mini Darkstore (MDS)
   master_produk.py       # Merge Master Produk + filter TAG
   apo_darkstore.py       # Update APO Darkstore (Excel + PNG)
   common.py              # ekstrak ZIP, recalc LibreOffice

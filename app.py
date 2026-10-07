@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from core import apo_darkstore, darkstore_ds, inventory_report, master_produk, mtd_performance
+from core import apo_darkstore, darkstore_ds, inventory_report, master_produk, mds_report, mtd_performance
 from core.common import Log, find_soffice, prepare_inputs
 
 st.set_page_config(page_title="Report Automation Darkstore", page_icon="📊", layout="wide")
@@ -129,6 +129,34 @@ def page_mtd_ds():
     show_result("res_mtd_ds")
 
 
+def page_mds():
+    st.header("Report Daily Mini Darkstore (MDS)")
+    st.caption("Input: `Detail_Data_*.csv` / .xlsx. Master MDS opsional (kalau ada toko baru/berubah).")
+    files = uploader("File mentah (Detail_Data_*.csv / .xlsx)", ["csv", "xlsx"], "up_mds", multiple=False)
+    with st.expander("Master MDS (opsional)"):
+        master = uploader("Master MDS.xlsx", ["xlsx", "csv"], "up_mds_master", multiple=False)
+
+    tgl = None
+    if files:
+        try:
+            dates = mds_report.available_dates(files[0])
+            files[0].seek(0)
+            tgl = st.selectbox("Tanggal report", dates[::-1],
+                               format_func=lambda d: f"{d.day} {mds_report.BULAN[d.month]} {d.year}")
+        except Exception as e:  # noqa: BLE001
+            st.error(f"File tidak bisa dibaca: {e}")
+            files = []
+
+    def job(i, o, log):
+        paths = save_uploads(files, i)
+        m = save_uploads(master, os.path.join(i, "_master"))[0] if master else None
+        return mds_report.run(paths, o, master_path=m, tanggal=tgl, log=log)
+
+    if st.button("Proses", type="primary", disabled=not files, key="btn_mds"):
+        run_job("res_mds", job)
+    show_result("res_mds")
+
+
 def page_inventory():
     st.header("Report Inventory, OOS, MAT, Store Performance")
     st.caption("Upload 6 file mentah (satu-satu atau 1 ZIP). File Report periode sebelumnya opsional — "
@@ -187,6 +215,7 @@ PAGES = {
     "Beranda": {"Beranda": (page_home, "")},
     "Daily": {
         "Daily Performance DS": (page_daily_ds, "Report Daily Performance Darkstore dari Detail Data + OOS"),
+        "Daily Mini Darkstore (MDS)": (page_mds, "Report Daily MDS: harian + MTD per toko mini darkstore"),
         "Inventory, OOS, MAT": (page_inventory, "Report Inventory, OOS, MAT & Store Performance"),
     },
     "MTD": {
