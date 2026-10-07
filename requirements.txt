@@ -1,6 +1,12 @@
+# web app
+streamlit>=1.40
 pandas
 numpy
 openpyxl
+xlrd
+lxml
+matplotlib
+# notebook (opsional)
 xlsxwriter
 jupyter
 nbstripout
