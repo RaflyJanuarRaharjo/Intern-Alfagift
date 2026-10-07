@@ -12,7 +12,8 @@ import openpyxl
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import apo_darkstore, darkstore_ds, inventory_report, master_produk, mtd_performance  # noqa: E402
+from core import (apo_darkstore, darkstore_ds, inventory_report, master_produk, mds_report,  # noqa: E402
+                  mtd_performance)
 
 random.seed(1)
 STORES = [(f"T{i:03d}", f"DS TOKO {i}", random.choice(["JAKARTA", "BEKASI", "SIDOARJO"])) for i in range(1, 13)]
@@ -104,6 +105,18 @@ def make_apo_input(d):
                               index=False)
 
 
+def make_mds_input(d):
+    rows = []
+    for day in range(1, 8):
+        for kd, nama in mds_report.DEFAULT_MASTER[:8] + [("ZZ99", "BUKAN MDS")]:
+            sales = random.randint(1_000_000, 9_000_000)
+            rows.append(dict(TANGGAL=f"2026-10-{day:02d}", KD_STORE=kd, NAMA_STORE=nama, KD_BRANCH="B1",
+                             NAMA_BRANCH="CABANG", REMARK="DARKSTORE", JHK=1, SALES=sales,
+                             SALES_TAGI=sales * .2, SPD=sales, STD=random.randint(50, 200),
+                             APC=random.randint(50_000, 90_000), PERCENT_GM=random.uniform(.1, .2)))
+    pd.DataFrame(rows).to_csv(os.path.join(d, "Detail_Data_Okt.csv"), index=False)
+
+
 def ls(d):
     return [os.path.join(d, f) for f in sorted(os.listdir(d))]
 
@@ -112,7 +125,7 @@ def main():
     root = tempfile.mkdtemp()
     out = os.path.join(root, "out")
     os.makedirs(out)
-    dirs = {k: os.path.join(root, k) for k in ("ds", "inv", "perf", "mp", "apo")}
+    dirs = {k: os.path.join(root, k) for k in ("ds", "inv", "perf", "mp", "apo", "mds")}
     for d in dirs.values():
         os.makedirs(d)
     make_detail_and_oos(dirs["ds"])
@@ -120,6 +133,7 @@ def main():
     make_perf_input(dirs["perf"])
     make_master_inputs(dirs["mp"])
     make_apo_input(dirs["apo"])
+    make_mds_input(dirs["mds"])
 
     ds_files = [p for p in ls(dirs["ds"]) if "Report Summary" not in p]
     results = {
@@ -128,6 +142,7 @@ def main():
         "inventory": inventory_report.run(ls(dirs["inv"]), out),
         "mtd_perf": mtd_performance.run(ls(dirs["perf"]), out, tanggal_laporan="7 SEP 2026"),
         "master_produk": master_produk.run(ls(dirs["mp"]), out),
+        "mds": mds_report.run(ls(dirs["mds"]), out),
         "apo": apo_darkstore.run(ls(dirs["apo"]), out, tanggal="07/10/2026", jam="10.15"),
     }
     for name, (path, _preview, extras) in results.items():
