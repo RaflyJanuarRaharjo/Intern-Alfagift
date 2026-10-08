@@ -4,6 +4,10 @@ Sumber: notebooks/daily/report_daily_performance_ds.ipynb dan
 notebooks/mtd/mtd_ds_performance_delivery.ipynb. Kedua notebook berbagi
 logika yang sama; versi MTD menambah file Report Summary (delivery) dan
 kolom %Ontime / %Late di sheet Summary.
+
+PERUBAHAN (fix KeyError JHK/SALES/... saat ZIP berisi 2 Detail Data + 2 OOS):
+- find_input_files: pilih Detail Data yang TRX (bukan SLA) dan OOS periode (Full/MTD).
+- load_detail_data: validasi kolom wajib, pesan error jelas kalau salah file.
 """
 import os
 
@@ -22,6 +26,11 @@ BULAN_FULL_ID = {1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April', 5: 'Mei', 
 
 N_FALLBACK_DAYS = 2
 
+# Kolom wajib pada file Detail Data TRX (file SLA tidak punya kolom-kolom ini)
+REQUIRED_DETAIL_COLS = ["TANGGAL", "KD_STORE", "NAMA_STORE", "NAMA_BRANCH",
+                        "JHK", "SALES", "SALES_TAGI", "SPD", "STD", "APC",
+                        "PERCENT_GM", "PCT_OOS_OFMB"]
+
 FILL_HEADER = PatternFill("solid", fgColor="D9E1F2")
 FONT_TITLE = Font(bold=True, size=14)
 FONT_SUB = Font(size=11)
@@ -37,13 +46,24 @@ FMT_PCT = "0.00%"
 
 # ---------------------------------------------------------------- input
 def find_input_files(paths, need_report_summary=False):
-    """Cari Detail Data (.csv), [OOS] By Toko (.xlsx) dan (opsional) Report Summary (.xlsx)."""
+    """Cari Detail Data TRX (.csv), [OOS] By Toko (.xlsx) dan (opsional) Report Summary (.xlsx).
+
+    Aturan pemilihan (berdasarkan nama file):
+    - CSV  : utamakan yang mengandung 'trx'; file 'sla' tidak dipakai di sini.
+    - OOS  : utamakan yang mengandung 'full' atau 'mtd' (OOS periode 1-tanggal akhir),
+             kalau tidak ada pakai OOS pertama yang ditemukan.
+    """
     names = {p: os.path.basename(p).lower() for p in paths}
     csvs = [p for p in paths if names[p].endswith(".csv")]
-    csv = next((p for p in csvs if "detail" in names[p] and "data" in names[p]), csvs[0] if csvs else None)
+
+    detail = [p for p in csvs if "detail" in names[p] and "data" in names[p]] or csvs
+    csv = (next((p for p in detail if "trx" in names[p]), None)
+           or next((p for p in detail if "sla" not in names[p]), None))
 
     xlsxs = [p for p in paths if names[p].endswith(".xlsx") and "report daily" not in names[p]]
-    oos = next((p for p in xlsxs if "oos" in names[p]), None)
+    oos_all = [p for p in xlsxs if "oos" in names[p]]
+    oos = (next((p for p in oos_all if "full" in names[p] or "mtd" in names[p]), None)
+           or (oos_all[0] if oos_all else None))
 
     report_summary = None
     if need_report_summary:
@@ -55,7 +75,9 @@ def find_input_files(paths, need_report_summary=False):
         oos = rest[0] if rest else None
 
     if csv is None:
-        raise FileNotFoundError("File Detail Data (.csv) tidak ditemukan.")
+        raise FileNotFoundError(
+            "File Detail Data TRX (.csv) tidak ditemukan. "
+            "Pastikan ada file CSV yang namanya mengandung 'TRX' (bukan 'SLA').")
     if oos is None:
         raise FileNotFoundError("File [OOS] By Toko (.xlsx) tidak ditemukan.")
     if need_report_summary and report_summary is None:
@@ -65,6 +87,12 @@ def find_input_files(paths, need_report_summary=False):
 
 def load_detail_data(csv_path, kd_store_as_str=False):
     df = pd.read_csv(csv_path)
+    df.columns = [str(c).replace("\ufeff", "").strip() for c in df.columns]
+    missing = [c for c in REQUIRED_DETAIL_COLS if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"File '{os.path.basename(csv_path)}' bukan Detail Data TRX. "
+            f"Kolom hilang: {missing}. Kolom yang terbaca: {list(df.columns)[:15]}...")
     df["TANGGAL"] = pd.to_datetime(df["TANGGAL"])
     if kd_store_as_str:
         df["KD_STORE"] = df["KD_STORE"].astype(str).str.strip()
@@ -76,6 +104,12 @@ def load_oos_data(xlsx_path):
     df.columns = [str(c).strip() for c in df.columns]
     df = df[df.iloc[:, 0].astype(str).str.strip().str.lower() != "grand total"]
     df = df.dropna(subset=[df.columns[0]]).reset_index(drop=True)
+    needed = ["% OOS OFMB", "% OOS TAG I", "% OOS TAG K"]
+    missing = [c for c in needed if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"File OOS '{os.path.basename(xlsx_path)}' kolom hilang: {missing}. "
+            f"Kolom yang terbaca: {list(df.columns)}")
     return df
 
 
