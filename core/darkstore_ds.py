@@ -471,6 +471,8 @@ def run(paths, output_dir, with_delivery=False, report_summary_path=None,
     log(f"Detail Data: {len(df_detail)} baris, {df_detail['KD_STORE'].nunique()} toko, periode "
         f"{df_detail['TANGGAL'].min().date()} s.d. {df_detail['TANGGAL'].max().date()}")
     log(f"OOS By Toko: {len(df_oos)} toko")
+    from .storage import save_if_configured
+    save_if_configured(df_detail, df_oos, log)
 
     summary, daily_tables, df_period, missing, fallback_dates = build_summary_table(
         df_detail, df_oos, df_rs, n_fallback_days)
