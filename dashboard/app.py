@@ -13,7 +13,8 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import storage  # noqa: E402
-from core.growth import compute_growth, has_previous_month  # noqa: E402
+from core.growth import (compute_growth, has_previous_month, incomplete_dates,  # noqa: E402
+                         last_complete_date)
 
 st.set_page_config(page_title="Dashboard Darkstore", layout="wide")
 
@@ -66,12 +67,22 @@ with st.sidebar:
         st.rerun()
     cabang = st.multiselect("Cabang", sorted(hist["NAMA_BRANCH"].dropna().unique()))
     dates = sorted(hist["TANGGAL"].dt.normalize().unique())
-    as_of = st.selectbox("Per tanggal", dates[::-1],
+    bad_dates = incomplete_dates(hist)
+    use_all = st.checkbox("Sertakan tanggal yang datanya belum lengkap", value=False)
+    pick = dates if (use_all or not bad_dates) else [d for d in dates if pd.Timestamp(d) not in set(bad_dates)]
+    pick = pick or dates
+    as_of = st.selectbox("Per tanggal", pick[::-1],
                          format_func=lambda d: pd.Timestamp(d).strftime("%d %b %Y"))
 
 view = hist if not cabang else hist[hist["NAMA_BRANCH"].isin(cabang)]
 as_of = pd.Timestamp(as_of)
 g = compute_growth(view, as_of)
+
+if bad_dates and not use_all:
+    st.warning("Tanggal berikut disembunyikan karena datanya tampak belum lengkap "
+               "(total Sales jauh di bawah hari-hari sebelumnya): "
+               + ", ".join(pd.Timestamp(d).strftime("%d %b") for d in bad_dates)
+               + ". Centang 'Sertakan tanggal...' di sidebar untuk menampilkannya.")
 
 # ---------------------------------------------------------------- KPI
 month_start = as_of.replace(day=1)
@@ -85,7 +96,8 @@ c4.metric("Rata-rata %GM (MTD)", f"{mtd['PERCENT_GM'].mean() * 100:,.2f}%")
 
 # ---------------------------------------------------------------- tren
 st.subheader("Tren Sales harian")
-trend = view.groupby(view["TANGGAL"].dt.normalize())["SALES"].sum()
+trend_src = view if use_all else view[~view["TANGGAL"].dt.normalize().isin(bad_dates)]
+trend = trend_src.groupby(trend_src["TANGGAL"].dt.normalize())["SALES"].sum()
 st.line_chart(trend)
 
 # ---------------------------------------------------------------- tabel growth

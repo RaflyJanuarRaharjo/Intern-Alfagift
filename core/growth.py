@@ -63,3 +63,28 @@ def has_previous_month(hist, as_of=None):
     """True kalau riwayat memuat bulan sebelum bulan as_of (supaya Growth MTD bermakna)."""
     as_of = pd.Timestamp(as_of or hist["TANGGAL"].max())
     return bool((hist["TANGGAL"] < as_of.replace(day=1)).any())
+
+
+def incomplete_dates(hist, threshold=0.5, window=7, min_history=3):
+    """Deteksi tanggal yang datanya kemungkinan BELUM LENGKAP.
+
+    Aturan: total Sales semua toko hari itu < threshold x median total Sales hari-hari
+    lengkap sebelumnya (maksimal `window` hari terakhir). Hari pertama (belum ada
+    pembanding) dianggap lengkap. Return: list Timestamp, urut naik.
+    """
+    daily = hist.groupby(hist["TANGGAL"].dt.normalize())["SALES"].sum().sort_index()
+    complete_vals, bad = [], []
+    for d, v in daily.items():
+        ref = complete_vals[-window:]
+        if len(ref) >= min_history and v < threshold * float(np.median(ref)):
+            bad.append(d)
+        else:
+            complete_vals.append(v)
+    return bad
+
+
+def last_complete_date(hist, **kw):
+    """Tanggal terakhir yang datanya lengkap (None kalau tidak ada)."""
+    bad = set(incomplete_dates(hist, **kw))
+    days = [d for d in sorted(hist["TANGGAL"].dt.normalize().unique()) if pd.Timestamp(d) not in bad]
+    return pd.Timestamp(days[-1]) if days else None
