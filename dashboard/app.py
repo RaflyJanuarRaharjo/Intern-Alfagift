@@ -73,6 +73,24 @@ PCT_FMT = st.column_config.NumberColumn(format="%.1f%%")
 INT_FMT = st.column_config.NumberColumn(format="%.0f")
 
 
+def search_box(key):
+    return st.text_input("Cari toko / kode / cabang", key=key,
+                         placeholder="mis. 1A08, puskopkar, jambi").strip()
+
+
+def apply_search(df, q):
+    """Filter baris yang kode/nama toko/cabangnya mengandung teks pencarian.
+    Pisahkan dengan koma untuk mencari beberapa sekaligus (mis. '1A08, 1A0Y')."""
+    if not q or df is None or df.empty:
+        return df
+    cols = [c for c in ("KD_STORE", "NAMA_STORE", "NAMA_BRANCH") if c in df.columns]
+    hay = df[cols].astype(str).agg(" ".join, axis=1).str.lower()
+    mask = pd.Series(False, index=df.index)
+    for term in [t.strip().lower() for t in q.split(",") if t.strip()]:
+        mask |= hay.str.contains(term, regex=False)
+    return df[mask]
+
+
 # ================================================================ HALAMAN: GROWTH DS
 def page_ds():
     st.title("Dashboard Performance Darkstore")
@@ -84,6 +102,7 @@ def page_ds():
         st.header("Filter")
         reload_button("reload_ds")
         cabang = st.multiselect("Cabang", sorted(hist["NAMA_BRANCH"].dropna().unique()), key="cab_ds")
+        q = search_box("q_ds")
         dates = sorted(hist["TANGGAL"].dt.normalize().unique())
         bad_dates = incomplete_dates(hist)
         pick, use_all = pick_dates(bad_dates, dates, "all_ds")
@@ -91,6 +110,10 @@ def page_ds():
                              format_func=lambda d: pd.Timestamp(d).strftime("%d %b %Y"))
 
     view = hist if not cabang else hist[hist["NAMA_BRANCH"].isin(cabang)]
+    view = apply_search(view, q)
+    if view.empty:
+        st.info("Tidak ada toko yang cocok dengan pencarian.")
+        return
     as_of = pd.Timestamp(as_of)
     g = compute_growth(view, as_of)
 
@@ -165,7 +188,13 @@ def page_mds():
         st.header("Filter")
         reload_button("reload_mds")
         cabang = st.multiselect("Cabang", sorted(mds_hist["NAMA_BRANCH"].dropna().unique()), key="cab_mds")
-        mh = mds_hist if not cabang else mds_hist[mds_hist["NAMA_BRANCH"].isin(cabang)]
+        q = search_box("q_mds")
+    mh = mds_hist if not cabang else mds_hist[mds_hist["NAMA_BRANCH"].isin(cabang)]
+    mh = apply_search(mh, q)
+    if mh.empty:
+        st.info("Tidak ada toko MDS yang cocok dengan pencarian.")
+        return
+    with st.sidebar:
         dates = sorted(mh["TANGGAL"].dt.normalize().unique())
         bad_dates = incomplete_dates(mds_hist)
         pick, use_all = pick_dates(bad_dates, dates, "all_mds")
@@ -222,6 +251,7 @@ def page_mds():
     # ---- OTD / LATE (dari SLA)
     if mds_sla is not None and not mds_sla.empty:
         sl = mds_sla if not cabang else mds_sla[mds_sla["NAMA_BRANCH"].isin(cabang)]
+        sl = apply_search(sl, q)
         st.subheader("OTD dan LATE")
         daily = sl.groupby(sl["TANGGAL"].dt.normalize())[
             ["DELIVERY_ONTIME", "DELIVERY_LATE", "JUMLAH_DELIVERY"]].sum()
@@ -248,6 +278,7 @@ def page_mds():
     if mds is not None and not mds.empty:
         st.subheader("Snapshot report MDS")
         m = mds if not cabang else mds[mds["NAMA_BRANCH"].isin(cabang)]
+        m = apply_search(m, q)
         snap_dates = sorted(m["TANGGAL"].dt.normalize().unique())
         snap_date = st.selectbox("Tanggal snapshot", snap_dates[::-1], key="snap_mds",
                                  format_func=lambda d: pd.Timestamp(d).strftime("%d %b %Y"))
