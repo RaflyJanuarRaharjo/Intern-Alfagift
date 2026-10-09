@@ -473,6 +473,12 @@ def run(paths, output_dir, with_delivery=False, report_summary_path=None,
     log(f"OOS By Toko: {len(df_oos)} toko")
     from .storage import save_if_configured
     save_if_configured(df_detail, df_oos, log)
+    if with_delivery:
+        try:
+            from .storage import save_ds_sla_if_configured
+            save_ds_sla_if_configured(_read_report_summary_raw(rs_path), df_detail["TANGGAL"].max(), log)
+        except Exception as e:  # noqa: BLE001
+            log(f"[Penyimpanan] DS SLA GAGAL, report tetap dibuat: {type(e).__name__}: {e}")
 
     summary, daily_tables, df_period, missing, fallback_dates = build_summary_table(
         df_detail, df_oos, df_rs, n_fallback_days)
