@@ -41,15 +41,26 @@ check_password()
 
 
 # ---------------------------------------------------------------- data
+def _safe_load(backend, name):
+    """Panggil storage.<name>(backend); kalau fungsinya belum ada / gagal, kembalikan tabel kosong."""
+    fn = getattr(storage, name, None)
+    if fn is None:
+        return pd.DataFrame()
+    try:
+        return fn(backend)
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame()
+
+
 @st.cache_data(ttl=300, show_spinner="Memuat data...")
 def load():
     backend = storage.get_backend_from_streamlit()
     if backend is None:
         return None, None, None, None, None, None, None
-    return (storage.load_history(backend), storage.load_oos(backend),
-            storage.load_mds(backend), storage.load_mds_history(backend),
-            storage.load_mds_sla(backend), storage.load_ds_sla(backend),
-            storage.load_ds_sla_daily(backend))
+    return (storage.load_history(backend), _safe_load(backend, "load_oos"),
+            _safe_load(backend, "load_mds"), _safe_load(backend, "load_mds_history"),
+            _safe_load(backend, "load_mds_sla"), _safe_load(backend, "load_ds_sla"),
+            _safe_load(backend, "load_ds_sla_daily"))
 
 
 hist, oos, mds, mds_hist, mds_sla, ds_sla, ds_sla_daily = load()
