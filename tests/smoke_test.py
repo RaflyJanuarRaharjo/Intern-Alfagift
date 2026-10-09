@@ -12,6 +12,7 @@ import openpyxl
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.common import prepare_inputs  # noqa: E402
 from core import (apo_darkstore, darkstore_ds, inventory_report, master_produk, mds_report,  # noqa: E402
                   mtd_performance)
 
@@ -117,6 +118,35 @@ def make_mds_input(d):
     pd.DataFrame(rows).to_csv(os.path.join(d, "Detail_Data_Okt.csv"), index=False)
 
 
+def make_mds_zip(d):
+    """1 ZIP berisi TRX + SLA + Master MDS (+ report lama) seperti pemakaian sebenarnya."""
+    import zipfile
+    stores = mds_report.DEFAULT_MASTER[:8] + [("ZZ99", "BUKAN MDS")]
+    trx, sla = [], []
+    for day in range(1, 8):
+        for kd, nama in stores:
+            sales = random.randint(1_000_000, 9_000_000)
+            base = dict(TANGGAL=f"2026-10-{day:02d}", KD_STORE=kd, NAMA_STORE=nama, KD_BRANCH="B1",
+                        NAMA_BRANCH="CABANG", REMARK="SAPA_NON_DS", PCT_OOS_OFMB=random.uniform(.01, .05))
+            trx.append(dict(base, JHK=1, SALES=sales, SALES_TAGI=sales * .2, SPD=sales,
+                            STD=random.randint(50, 200), APC=random.randint(50_000, 90_000),
+                            PERCENT_GM=random.uniform(.1, .2)))
+            n = random.randint(40, 120)
+            late = random.randint(0, 15)
+            sla.append(dict(base, JUMLAH_DELIVERY=n, DELIVERY_ONTIME=n - late, DELIVERY_LATE=late))
+    pd.DataFrame(trx).to_csv(os.path.join(d, "Detail_Data_Okt TRX.csv"), index=False)
+    pd.DataFrame(sla).to_csv(os.path.join(d, "Detail_Data_Okt SLA.csv"), index=False)
+    pd.DataFrame(mds_report.DEFAULT_MASTER[:8], columns=["KD STORE", "NAMA STORE"]).assign(
+        **{"REMARK MDS": "MINI DARKSTORE"}).to_excel(os.path.join(d, "Master MDS.xlsx"), index=False)
+    pd.DataFrame({"x": [1]}).to_excel(os.path.join(d, "Report Daily MDS - lama.xlsx"), index=False)
+    zp = os.path.join(d, "Data Report Daily MDS.zip")
+    with zipfile.ZipFile(zp, "w") as z:
+        for f in ("Detail_Data_Okt TRX.csv", "Detail_Data_Okt SLA.csv", "Master MDS.xlsx",
+                  "Report Daily MDS - lama.xlsx"):
+            z.write(os.path.join(d, f), "Data Report Daily MDS/" + f)
+            os.remove(os.path.join(d, f))
+
+
 def ls(d):
     return [os.path.join(d, f) for f in sorted(os.listdir(d))]
 
@@ -134,6 +164,8 @@ def main():
     make_master_inputs(dirs["mp"])
     make_apo_input(dirs["apo"])
     make_mds_input(dirs["mds"])
+    os.makedirs(os.path.join(root, "mdszip"))
+    make_mds_zip(os.path.join(root, "mdszip"))
 
     ds_files = [p for p in ls(dirs["ds"]) if "Report Summary" not in p]
     results = {
@@ -143,6 +175,8 @@ def main():
         "mtd_perf": mtd_performance.run(ls(dirs["perf"]), out, tanggal_laporan="7 SEP 2026"),
         "master_produk": master_produk.run(ls(dirs["mp"]), out),
         "mds": mds_report.run(ls(dirs["mds"]), out),
+        "mds_zip": mds_report.run(prepare_inputs(os.path.join(root, "mdszip")),
+                                  os.path.join(root, "out_zip") if os.makedirs(os.path.join(root, "out_zip"), exist_ok=True) is None else out),
         "apo": apo_darkstore.run(ls(dirs["apo"]), out, tanggal="07/10/2026", jam="10.15"),
     }
     for name, (path, _preview, extras) in results.items():

@@ -131,28 +131,52 @@ def page_mtd_ds():
 
 def page_mds():
     st.header("Report Daily Mini Darkstore (MDS)")
-    st.caption("Input: `Detail_Data_*.csv` / .xlsx. Master MDS opsional (kalau ada toko baru/berubah).")
-    files = uploader("File mentah (Detail_Data_*.csv / .xlsx)", ["csv", "xlsx"], "up_mds", multiple=False)
-    with st.expander("Master MDS (opsional)"):
-        master = uploader("Master MDS.xlsx", ["xlsx", "csv"], "up_mds_master", multiple=False)
+    st.caption("Upload **1 ZIP** berisi `Detail_Data_*TRX.csv`, `Detail_Data_*SLA.csv` dan `Master MDS.xlsx` "
+               "(file `Report Daily MDS ...xlsx` lama boleh ikut di dalam ZIP, otomatis diabaikan). "
+               "Bisa juga upload file-file itu satu-satu. Hasil: `Report Daily MDS <tanggal>.xlsx`.")
+    files = uploader("Upload ZIP / file", ["zip", "csv", "xlsx"], "up_mds", multiple=True)
 
-    tgl = None
+    inp, tgl = None, None
     if files:
-        try:
-            dates = mds_report.available_dates(files[0])
-            files[0].seek(0)
-            tgl = st.selectbox("Tanggal report", dates[::-1],
-                               format_func=lambda d: f"{d.day} {mds_report.BULAN[d.month]} {d.year}")
-        except Exception as e:  # noqa: BLE001
-            st.error(f"File tidak bisa dibaca: {e}")
-            files = []
+        sig = tuple((f.name, f.size) for f in files)
+        cache = st.session_state.get("mds_inputs")
+        if not cache or cache["sig"] != sig:
+            try:
+                tmp = tempfile.mkdtemp(prefix="mds_in_")
+                paths = save_uploads(files, tmp)
+                loaded = mds_report.load_inputs(paths)
+                st.session_state["mds_inputs"] = {"sig": sig, "inp": loaded, "tmp": tmp}
+            except Exception as e:  # noqa: BLE001
+                st.session_state.pop("mds_inputs", None)
+                st.error(f"File tidak bisa dibaca: {e}")
+        cache = st.session_state.get("mds_inputs")
+        if cache and cache["sig"] == sig:
+            inp = cache["inp"]
+            g = inp["files"]
+            nm = lambda p: os.path.basename(p) if p else None  # noqa: E731
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f"**TRX**  \n{nm(g['trx']) or '❌ tidak ditemukan'}")
+            c2.markdown(f"**SLA**  \n{nm(g['sla']) or '⚠️ tidak ada (%OTD & %LATE kosong)'}")
+            c3.markdown(f"**Master MDS**  \n{nm(inp['master_path']) or 'bawaan (52 toko)'}")
+            dates = mds_report.available_dates(inp)
+            if dates:
+                tgl = st.selectbox("Tanggal report", dates[::-1],
+                                   format_func=lambda d: f"{d.day} {mds_report.BULAN[d.month]} {d.year}")
+            else:
+                st.error("Tidak ada tanggal yang sama antara file TRX dan SLA.")
+
+    with st.expander("Master MDS terpisah (opsional)"):
+        master = uploader("Master MDS.xlsx (menggantikan yang ada di ZIP)", ["xlsx", "csv"], "up_mds_master",
+                          multiple=False)
+    inc_raw = st.checkbox("Sertakan sheet Data Raw & Data SLA penuh (file jadi besar & lebih lama)", value=False)
 
     def job(i, o, log):
         paths = save_uploads(files, i)
         m = save_uploads(master, os.path.join(i, "_master"))[0] if master else None
-        return mds_report.run(paths, o, master_path=m, tanggal=tgl, log=log)
+        return mds_report.run(paths, o, master_path=m, tanggal=tgl, include_raw=inc_raw, log=log)
 
-    if st.button("Proses", type="primary", disabled=not files, key="btn_mds"):
+    ready = bool(files) and inp is not None and inp["trx"] is not None and tgl is not None
+    if st.button("Proses", type="primary", disabled=not ready, key="btn_mds"):
         run_job("res_mds", job)
     show_result("res_mds")
 
