@@ -292,9 +292,110 @@ def page_mds():
 
 
 # ---------------------------------------------------------------- navbar
+# ================================================================ HALAMAN: COMPARE TOKO
+def page_compare():
+    st.title("Compare Toko")
+    sumber = st.radio("Sumber data", ["Growth DS", "MDS"], horizontal=True, key="cmp_src")
+    base = hist if sumber == "Growth DS" else mds_hist
+    if base is None or base.empty:
+        st.info("Data belum tersedia untuk sumber ini.")
+        return
+
+    sdf = base.drop_duplicates("KD_STORE", keep="last")[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH"]].copy()
+    sdf["label"] = (sdf["KD_STORE"].astype(str) + " - " + sdf["NAMA_STORE"].astype(str)
+                    + " (" + sdf["NAMA_BRANCH"].astype(str) + ")")
+    sdf = sdf.sort_values("label")
+    label2code = dict(zip(sdf["label"], sdf["KD_STORE"]))
+    short = dict(zip(sdf["KD_STORE"], sdf["KD_STORE"].astype(str) + " " + sdf["NAMA_STORE"].astype(str)))
+    metric_opts = {"Sales": "SALES", "SPD": "SPD", "STD": "STD", "APC": "APC",
+                   "%GM": "PERCENT_GM", "%OOS OFMB": "PCT_OOS_OFMB", "JHK": "JHK"}
+
+    with st.sidebar:
+        st.header("Filter")
+        reload_button("reload_cmp")
+        chosen = st.multiselect("Pilih toko (2-6)", list(label2code), max_selections=6, key="cmp_stores")
+        dates = sorted(base["TANGGAL"].dt.normalize().unique())
+        bad = incomplete_dates(base)
+        pick, use_all = pick_dates(bad, dates, "all_cmp")
+        as_of = st.selectbox("Per tanggal", pick[::-1], key="asof_cmp",
+                             format_func=lambda d: pd.Timestamp(d).strftime("%d %b %Y"))
+        metric = st.selectbox("Metrik tren", list(metric_opts), key="cmp_metric")
+
+    if len(chosen) < 2:
+        st.info("Pilih minimal 2 toko di sidebar (bisa cari dengan mengetik kode atau nama toko).")
+        return
+
+    as_of = pd.Timestamp(as_of)
+    codes = [label2code[c] for c in chosen]
+    sub = base[base["KD_STORE"].isin(codes)].copy()
+    sub["Toko"] = sub["KD_STORE"].map(short)
+
+    # ---- tren
+    col = metric_opts[metric]
+    ts = sub if use_all else sub[~sub["TANGGAL"].dt.normalize().isin(bad)]
+    tr = (ts.assign(_d=ts["TANGGAL"].dt.normalize())
+          .pivot_table(index="_d", columns="Toko", values=col, aggfunc="mean"))
+    if col in ("PERCENT_GM", "PCT_OOS_OFMB"):
+        tr = tr * 100
+    st.subheader(f"Tren {metric}")
+    st.line_chart(tr)
+
+    # ---- tabel perbandingan
+    g = compute_growth(sub, as_of)
+    month_start = as_of.replace(day=1)
+    dd = sub["TANGGAL"].dt.normalize()
+    day = sub[dd == as_of][["KD_STORE", "JHK", "SPD", "STD", "APC", "PERCENT_GM", "PCT_OOS_OFMB"]]
+    mt = (sub[(dd >= month_start) & (dd <= as_of)]
+          .groupby("KD_STORE")[["SPD", "STD", "APC", "PERCENT_GM"]].mean()
+          .add_suffix(" MTD").reset_index())
+    tab = g.merge(day, on="KD_STORE", how="left").merge(mt, on="KD_STORE", how="left")
+
+    if sumber == "MDS" and mds_sla is not None and not mds_sla.empty:
+        sl = mds_sla[mds_sla["KD_STORE"].isin(codes)]
+        sd = sl["TANGGAL"].dt.normalize()
+        cols_sla = ["DELIVERY_ONTIME", "JUMLAH_DELIVERY"]
+        d1 = sl[sd == as_of].groupby("KD_STORE")[cols_sla].sum()
+        d2 = sl[(sd >= month_start) & (sd <= as_of)].groupby("KD_STORE")[cols_sla].sum()
+        otd = pd.DataFrame({
+            "%OTD": d1["DELIVERY_ONTIME"] / d1["JUMLAH_DELIVERY"].replace(0, float("nan")) * 100,
+            "%OTD MTD": d2["DELIVERY_ONTIME"] / d2["JUMLAH_DELIVERY"].replace(0, float("nan")) * 100,
+        }).reset_index()
+        tab = tab.merge(otd, on="KD_STORE", how="left")
+
+    for c in ["Growth DoD", "Growth WoW", "Growth MTD", "PERCENT_GM", "PCT_OOS_OFMB", "PERCENT_GM MTD"]:
+        if c in tab.columns:
+            tab[c] = tab[c] * 100
+    tab = tab.rename(columns={"PERCENT_GM": "%GM", "PCT_OOS_OFMB": "%OOS OFMB", "PERCENT_GM MTD": "%GM MTD"})
+    tab["Toko"] = tab["KD_STORE"].map(short)
+
+    order = ["Toko", "NAMA_BRANCH", "Sales", "Growth DoD", "Growth WoW", "MTD", "MTD bulan lalu",
+             "Growth MTD", "JHK", "SPD", "STD", "APC", "%GM", "%OOS OFMB",
+             "SPD MTD", "STD MTD", "APC MTD", "%GM MTD", "%OTD", "%OTD MTD"]
+    tab = tab[[c for c in order if c in tab.columns]]
+    pct_cols = ["Growth DoD", "Growth WoW", "Growth MTD", "%GM", "%OOS OFMB", "%GM MTD", "%OTD", "%OTD MTD"]
+    cfg = {c: st.column_config.NumberColumn(format="%.1f%%") for c in pct_cols if c in tab.columns}
+    for c in ["Sales", "MTD", "MTD bulan lalu", "JHK", "SPD", "STD", "APC", "SPD MTD", "STD MTD", "APC MTD"]:
+        if c in tab.columns:
+            cfg[c] = st.column_config.NumberColumn(format="%.0f")
+
+    st.subheader(f"Perbandingan per {as_of.strftime('%d %b %Y')}")
+    st.dataframe(tab, use_container_width=True, hide_index=True, column_config=cfg)
+
+    # ---- grafik batang antar toko
+    a, b = st.columns(2)
+    with a:
+        st.caption("Sales MTD")
+        st.bar_chart(tab.set_index("Toko")["MTD"])
+    with b:
+        if "SPD MTD" in tab.columns:
+            st.caption("Rata-rata SPD MTD")
+            st.bar_chart(tab.set_index("Toko")["SPD MTD"])
+
+
 pages = [
     st.Page(page_ds, title="Growth DS", default=True),
     st.Page(page_mds, title="MDS", url_path="mds"),
+    st.Page(page_compare, title="Compare Toko", url_path="compare"),
 ]
 try:
     nav = st.navigation(pages, position="top")   # navbar di atas (Streamlit >= 1.46)
