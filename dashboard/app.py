@@ -1,4 +1,4 @@
-"""Dashboard Performance Darkstore (read-only), dengan navbar: Growth DS | MDS.
+"""Dashboard Performance Darkstore (read-only), dengan navbar: Growth DS | MDS | Compare Toko.
 
 Deploy sebagai app Streamlit KEDUA:  Main file path = dashboard/app.py
 Membaca riwayat yang disimpan oleh app olah data. Tidak ada upload di sini.
@@ -57,6 +57,33 @@ if hist is None:
     st.stop()
 
 
+# ---------------------------------------------------------------- format angka (gaya Indonesia)
+def fmt_num(v, d=0):
+    """1234567.8 -> '1.234.568' (d=0) atau '1.234.567,8' (d=1)."""
+    if v is None or pd.isna(v):
+        return "-"
+    s = f"{v:,.{d}f}"
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def fmt_pct(v, d=1):
+    if v is None or pd.isna(v):
+        return "-"
+    return fmt_num(v, d) + "%"
+
+
+def styled(df, int_cols=(), pct_cols=(), pct_dec=1):
+    """Styler: tampilan pakai titik ribuan, nilai asli tetap angka (sort tetap benar)."""
+    fm = {}
+    for c in int_cols:
+        if c in df.columns:
+            fm[c] = lambda v: fmt_num(v, 0)
+    for c in pct_cols:
+        if c in df.columns:
+            fm[c] = lambda v, d=pct_dec: fmt_pct(v, d)
+    return df.style.format(fm, na_rep="-")
+
+
 def reload_button(key):
     if st.button("Muat ulang data", key=key):
         st.cache_data.clear()
@@ -67,10 +94,6 @@ def pick_dates(bad_dates, dates, key):
     use_all = st.checkbox("Sertakan tanggal yang datanya belum lengkap", value=False, key=key)
     pick = dates if (use_all or not bad_dates) else [d for d in dates if pd.Timestamp(d) not in set(bad_dates)]
     return (pick or dates), use_all
-
-
-PCT_FMT = st.column_config.NumberColumn(format="%.1f%%")
-INT_FMT = st.column_config.NumberColumn(format="%.0f")
 
 
 def search_box(key):
@@ -89,6 +112,12 @@ def apply_search(df, q):
     for term in [t.strip().lower() for t in q.split(",") if t.strip()]:
         mask |= hay.str.contains(term, regex=False)
     return df[mask]
+
+
+GROWTH_COLS = ["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "Sales", "Growth DoD", "Growth WoW",
+               "MTD", "MTD bulan lalu", "Growth MTD"]
+GROWTH_INT = ["Sales", "MTD", "MTD bulan lalu"]
+GROWTH_PCT = ["Growth DoD", "Growth WoW", "Growth MTD"]
 
 
 # ================================================================ HALAMAN: GROWTH DS
@@ -126,10 +155,10 @@ def page_ds():
     month_start = as_of.replace(day=1)
     mtd = view[(view["TANGGAL"].dt.normalize() >= month_start) & (view["TANGGAL"].dt.normalize() <= as_of)]
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(f"Sales {as_of.strftime('%d %b')}", f"{g['Sales'].sum():,.0f}")
-    c2.metric("Sales MTD", f"{mtd['SALES'].sum():,.0f}")
-    c3.metric("Rata-rata SPD (MTD)", f"{mtd['SPD'].mean():,.0f}")
-    c4.metric("Rata-rata %GM (MTD)", f"{mtd['PERCENT_GM'].mean() * 100:,.2f}%")
+    c1.metric(f"Sales {as_of.strftime('%d %b')}", fmt_num(g["Sales"].sum()))
+    c2.metric("Sales MTD", fmt_num(mtd["SALES"].sum()))
+    c3.metric("Rata-rata SPD (MTD)", fmt_num(mtd["SPD"].mean()))
+    c4.metric("Rata-rata %GM (MTD)", fmt_pct(mtd["PERCENT_GM"].mean() * 100, 2))
 
     st.subheader("Tren Sales harian")
     trend_src = view if use_all else view[~view["TANGGAL"].dt.normalize().isin(bad_dates)]
@@ -140,15 +169,10 @@ def page_ds():
     if not has_previous_month(hist, as_of):
         st.caption("Growth MTD vs bulan lalu kosong: riwayat bulan sebelumnya belum tersimpan.")
     show = g.copy()
-    for col in ["Growth DoD", "Growth WoW", "Growth MTD"]:
+    for col in GROWTH_PCT:
         show[col] = show[col] * 100
-    st.dataframe(
-        show[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "Sales", "Growth DoD", "Growth WoW",
-              "MTD", "MTD bulan lalu", "Growth MTD"]],
-        use_container_width=True, hide_index=True,
-        column_config={"Sales": INT_FMT, "MTD": INT_FMT, "MTD bulan lalu": INT_FMT,
-                       "Growth DoD": PCT_FMT, "Growth WoW": PCT_FMT, "Growth MTD": PCT_FMT},
-    )
+    st.dataframe(styled(show[GROWTH_COLS], GROWTH_INT, GROWTH_PCT),
+                 use_container_width=True, hide_index=True)
 
     left, right = st.columns(2)
     with left:
@@ -166,13 +190,14 @@ def page_ds():
             on="KD_STORE", how="left")
         if cabang:
             o = o[o["NAMA_BRANCH"].isin(cabang)]
+        o = apply_search(o, q)
         st.caption(f"Periode s.d. {latest}")
-        for col in ["% OOS OFMB", "% OOS TAG I", "% OOS TAG K"]:
+        oos_cols = ["% OOS OFMB", "% OOS TAG I", "% OOS TAG K"]
+        for col in oos_cols:
             if col in o.columns:
                 o[col] = o[col] * 100
-        st.dataframe(o.sort_values("% OOS OFMB", ascending=False), use_container_width=True, hide_index=True,
-                     column_config={c: st.column_config.NumberColumn(format="%.2f%%")
-                                    for c in ["% OOS OFMB", "% OOS TAG I", "% OOS TAG K"] if c in o.columns})
+        st.dataframe(styled(o.sort_values("% OOS OFMB", ascending=False), pct_cols=oos_cols, pct_dec=2),
+                     use_container_width=True, hide_index=True)
 
 
 # ================================================================ HALAMAN: MDS
@@ -211,24 +236,19 @@ def page_mds():
     gm = compute_growth(mh, as_of)
     prev = gm["MTD bulan lalu"].sum()
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Jumlah toko MDS", f"{len(gm):,}")
-    k2.metric(f"Sales MDS {as_of.strftime('%d %b')}", f"{gm['Sales'].sum():,.0f}")
-    k3.metric("Sales MDS MTD", f"{gm['MTD'].sum():,.0f}")
-    k4.metric("Growth MTD MDS", f"{(gm['MTD'].sum() / prev - 1) * 100:,.1f}%" if prev else "-")
+    k1.metric("Jumlah toko MDS", fmt_num(len(gm)))
+    k2.metric(f"Sales MDS {as_of.strftime('%d %b')}", fmt_num(gm["Sales"].sum()))
+    k3.metric("Sales MDS MTD", fmt_num(gm["MTD"].sum()))
+    k4.metric("Growth MTD MDS", fmt_pct((gm["MTD"].sum() / prev - 1) * 100) if prev else "-")
     if not has_previous_month(mds_hist, as_of):
         st.caption("Growth MTD vs bulan lalu kosong: riwayat MDS bulan sebelumnya belum tersimpan.")
 
     st.subheader("Performa MDS per toko")
     show = gm.copy()
-    for col in ["Growth DoD", "Growth WoW", "Growth MTD"]:
+    for col in GROWTH_PCT:
         show[col] = show[col] * 100
-    st.dataframe(
-        show[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "Sales", "Growth DoD", "Growth WoW",
-              "MTD", "MTD bulan lalu", "Growth MTD"]],
-        use_container_width=True, hide_index=True,
-        column_config={"Sales": INT_FMT, "MTD": INT_FMT, "MTD bulan lalu": INT_FMT,
-                       "Growth DoD": PCT_FMT, "Growth WoW": PCT_FMT, "Growth MTD": PCT_FMT},
-    )
+    st.dataframe(styled(show[GROWTH_COLS], GROWTH_INT, GROWTH_PCT),
+                 use_container_width=True, hide_index=True)
 
     # ---- tren harian
     st.subheader("Tren harian MDS")
@@ -266,13 +286,10 @@ def page_mds():
             one["%OTD"] = one["DELIVERY_ONTIME"] / one["JUMLAH_DELIVERY"] * 100
             one["%LATE"] = one["DELIVERY_LATE"] / one["JUMLAH_DELIVERY"] * 100
             st.caption(f"Per toko, {as_of.strftime('%d %b %Y')}")
-            st.dataframe(
-                one[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "JUMLAH_DELIVERY", "%OTD", "%LATE"]]
-                .sort_values("%OTD"),
-                use_container_width=True, hide_index=True,
-                column_config={"JUMLAH_DELIVERY": INT_FMT,
-                               "%OTD": st.column_config.NumberColumn(format="%.1f%%"),
-                               "%LATE": st.column_config.NumberColumn(format="%.1f%%")})
+            tbl = (one[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "JUMLAH_DELIVERY", "%OTD", "%LATE"]]
+                   .sort_values("%OTD"))
+            st.dataframe(styled(tbl, ["JUMLAH_DELIVERY"], ["%OTD", "%LATE"]),
+                         use_container_width=True, hide_index=True)
 
     # ---- snapshot report MDS (SPD, STD, APC, GM, OOS)
     if mds is not None and not mds.empty:
@@ -287,11 +304,13 @@ def page_mds():
                     if c in snap.columns]
         for c in pct_cols:
             snap[c] = snap[c] * 100
-        st.dataframe(snap.drop(columns=["TANGGAL"]), use_container_width=True, hide_index=True,
-                     column_config={c: st.column_config.NumberColumn(format="%.2f%%") for c in pct_cols})
+        int_cols = [c for c in ["D_JHK", "D_SPD", "D_SPD_TAGI", "D_STD", "D_APC", "M_JHK", "M_SALES",
+                                "M_SALES_TAGI", "M_SPD", "M_SPD_TAGI", "M_STD", "M_APC"]
+                    if c in snap.columns]
+        st.dataframe(styled(snap.drop(columns=["TANGGAL"]), int_cols, pct_cols, pct_dec=2),
+                     use_container_width=True, hide_index=True)
 
 
-# ---------------------------------------------------------------- navbar
 # ================================================================ HALAMAN: COMPARE TOKO
 def page_compare():
     st.title("Compare Toko")
@@ -373,13 +392,10 @@ def page_compare():
              "SPD MTD", "STD MTD", "APC MTD", "%GM MTD", "%OTD", "%OTD MTD"]
     tab = tab[[c for c in order if c in tab.columns]]
     pct_cols = ["Growth DoD", "Growth WoW", "Growth MTD", "%GM", "%OOS OFMB", "%GM MTD", "%OTD", "%OTD MTD"]
-    cfg = {c: st.column_config.NumberColumn(format="%.1f%%") for c in pct_cols if c in tab.columns}
-    for c in ["Sales", "MTD", "MTD bulan lalu", "JHK", "SPD", "STD", "APC", "SPD MTD", "STD MTD", "APC MTD"]:
-        if c in tab.columns:
-            cfg[c] = st.column_config.NumberColumn(format="%.0f")
+    int_cols = ["Sales", "MTD", "MTD bulan lalu", "JHK", "SPD", "STD", "APC", "SPD MTD", "STD MTD", "APC MTD"]
 
     st.subheader(f"Perbandingan per {as_of.strftime('%d %b %Y')}")
-    st.dataframe(tab, use_container_width=True, hide_index=True, column_config=cfg)
+    st.dataframe(styled(tab, int_cols, pct_cols), use_container_width=True, hide_index=True)
 
     # ---- grafik batang antar toko
     a, b = st.columns(2)
@@ -392,6 +408,7 @@ def page_compare():
             st.bar_chart(tab.set_index("Toko")["SPD MTD"])
 
 
+# ---------------------------------------------------------------- navbar
 pages = [
     st.Page(page_ds, title="Growth DS", default=True),
     st.Page(page_mds, title="MDS", url_path="mds"),
