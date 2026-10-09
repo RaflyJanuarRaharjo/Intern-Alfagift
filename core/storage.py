@@ -213,6 +213,12 @@ def build_mds(res):
 def save_mds(res, backend, log=print):
     n, total = upsert(backend, MDS_SHEET, build_mds(res), MDS_KEYS)
     log(f"[Penyimpanan] mds: {n} baris diproses, total tersimpan {total}")
+    n, total = upsert(backend, MDS_HIST_SHEET, build_mds_history(res), HISTORY_KEYS)
+    log(f"[Penyimpanan] mds_history: {n} baris diproses, total tersimpan {total}")
+    sla = build_mds_sla(res)
+    if sla is not None:
+        n, total = upsert(backend, MDS_SLA_SHEET, sla, MDS_SLA_KEYS)
+        log(f"[Penyimpanan] mds_sla: {n} baris diproses, total tersimpan {total}")
 
 
 def save_mds_if_configured(res, log=print, backend=None):
@@ -235,3 +241,43 @@ def load_mds(backend):
         return m
     m["TANGGAL"] = pd.to_datetime(m["TANGGAL"])
     return m
+
+
+# ---- riwayat harian MDS (semua tanggal di file TRX/SLA)
+MDS_HIST_SHEET = "mds_history"
+MDS_SLA_SHEET = "mds_sla"
+MDS_SLA_KEYS = ["KD_STORE", "TANGGAL"]
+
+
+def build_mds_history(res):
+    """Data TRX toko MDS (semua tanggal) -> format sama dengan tab history."""
+    return build_history(res["data_mds"])
+
+
+def build_mds_sla(res):
+    """Data SLA toko MDS (semua tanggal) -> ringkasan per toko per tanggal. None kalau tidak ada SLA."""
+    s = res.get("sla_mds")
+    if s is None or len(s) == 0:
+        return None
+    o = s.copy()
+    o["KD_STORE"] = o["KD_STORE"].astype(str).str.strip()
+    o["TANGGAL"] = pd.to_datetime(o["TANGGAL"]).dt.strftime("%Y-%m-%d")
+    val = ["DELIVERY_ONTIME", "DELIVERY_LATE", "JUMLAH_DELIVERY"]
+    keys = ["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "TANGGAL"]
+    return o.groupby(keys, as_index=False)[val].sum().sort_values(MDS_SLA_KEYS).reset_index(drop=True)
+
+
+def load_mds_history(backend):
+    h = backend.read(MDS_HIST_SHEET)
+    if h.empty:
+        return h
+    h["TANGGAL"] = pd.to_datetime(h["TANGGAL"])
+    return h
+
+
+def load_mds_sla(backend):
+    s = backend.read(MDS_SLA_SHEET)
+    if s.empty:
+        return s
+    s["TANGGAL"] = pd.to_datetime(s["TANGGAL"])
+    return s
