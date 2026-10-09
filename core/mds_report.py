@@ -531,6 +531,8 @@ def run(paths, output_dir, master_path=None, tanggal=None, include_raw=False, lo
             raise ValueError("Tidak ada tanggal yang sama antara file TRX dan SLA.")
         tanggal = dates[-1]
     res = build(inp["trx"], inp["master"], tanggal, inp["sla"])
+    from core import storage  # simpan snapshot MDS ke Google Sheet (tab 'mds')
+    storage.save_mds_if_configured(res, log)
     xlsx = to_excel(res, include_raw)
     sm = res["summary"]
     log(f"Tanggal report: {res['tgl']:%d-%m-%Y} | {len(sm)} toko | "
