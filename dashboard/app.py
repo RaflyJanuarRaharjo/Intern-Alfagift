@@ -147,3 +147,85 @@ if oos is not None and not oos.empty:
     st.dataframe(o.sort_values("% OOS OFMB", ascending=False), use_container_width=True, hide_index=True,
                  column_config={c: st.column_config.NumberColumn(format="%.2f%%")
                                 for c in ["% OOS OFMB", "% OOS TAG I", "% OOS TAG K"] if c in o.columns})
+
+
+# ======================================================================
+# Growth MDS (tambahan)
+# ======================================================================
+@st.cache_data(ttl=300, show_spinner="Memuat data MDS...")
+def load_mds_data():
+    backend = storage.get_backend_from_streamlit()
+    if backend is None:
+        return None
+    return storage.load_mds(backend)
+
+
+st.divider()
+st.header("Growth MDS (Mini Darkstore)")
+
+mds = load_mds_data()
+if mds is None or mds.empty:
+    st.info("Data MDS belum tersimpan. Jalankan app olah data (report MDS) dulu.")
+else:
+    if cabang:
+        mds = mds[mds["NAMA_BRANCH"].isin(cabang)]
+    mds_codes = set(mds["KD_STORE"].unique())
+
+    # --- growth DoD / WoW / MTD dari riwayat, khusus toko MDS
+    mds_hist = view[view["KD_STORE"].isin(mds_codes)]
+    if mds_hist.empty:
+        st.info("Riwayat toko MDS belum ada di data history.")
+    else:
+        gm = compute_growth(mds_hist, as_of)
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Jumlah toko MDS", f"{len(gm):,}")
+        k2.metric(f"Sales MDS {as_of.strftime('%d %b')}", f"{gm['Sales'].sum():,.0f}")
+        k3.metric("Sales MDS MTD", f"{gm['MTD'].sum():,.0f}")
+        prev = gm["MTD bulan lalu"].sum()
+        k4.metric("Growth MTD MDS",
+                  f"{(gm['MTD'].sum() / prev - 1) * 100:,.1f}%" if prev else "-")
+
+        st.subheader("Performa MDS per toko")
+        shm = gm.copy()
+        for col in ["Growth DoD", "Growth WoW", "Growth MTD"]:
+            shm[col] = shm[col] * 100
+        st.dataframe(
+            shm[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "Sales", "Growth DoD",
+                 "Growth WoW", "MTD", "MTD bulan lalu", "Growth MTD"]],
+            use_container_width=True, hide_index=True,
+            column_config={
+                "Sales": st.column_config.NumberColumn(format="%.0f"),
+                "MTD": st.column_config.NumberColumn(format="%.0f"),
+                "MTD bulan lalu": st.column_config.NumberColumn(format="%.0f"),
+                "Growth DoD": st.column_config.NumberColumn(format="%.1f%%"),
+                "Growth WoW": st.column_config.NumberColumn(format="%.1f%%"),
+                "Growth MTD": st.column_config.NumberColumn(format="%.1f%%"),
+            },
+        )
+
+    # --- snapshot report MDS (SPD, STD, APC, GM, OOS, OTD, LATE)
+    st.subheader("Snapshot report MDS")
+    mds_dates = sorted(mds["TANGGAL"].dt.normalize().unique())
+    snap_date = st.selectbox("Tanggal snapshot MDS", mds_dates[::-1],
+                             format_func=lambda d: pd.Timestamp(d).strftime("%d %b %Y"))
+    snap = mds[mds["TANGGAL"].dt.normalize() == pd.Timestamp(snap_date)].copy()
+    pct_cols = [c for c in ["D_GM", "D_OOS", "D_OTD", "D_LATE",
+                            "M_GM", "M_OOS", "M_OTD", "M_LATE"] if c in snap.columns]
+    for c in pct_cols:
+        snap[c] = snap[c] * 100
+    st.dataframe(
+        snap.drop(columns=["TANGGAL"]), use_container_width=True, hide_index=True,
+        column_config={c: st.column_config.NumberColumn(format="%.2f%%") for c in pct_cols},
+    )
+
+    # --- tren MDS dari snapshot tersimpan
+    st.subheader("Tren MDS (rata-rata antar toko)")
+    trend_cols = [c for c in ["D_SPD", "D_STD", "D_APC"] if c in mds.columns]
+    if trend_cols:
+        tr = mds.groupby(mds["TANGGAL"].dt.normalize())[trend_cols].mean()
+        st.line_chart(tr)
+    if "D_OTD" in mds.columns and mds["D_OTD"].notna().any():
+        otd = mds.groupby(mds["TANGGAL"].dt.normalize())[["D_OTD", "D_LATE"]].mean() * 100
+        st.caption("OTD dan LATE (%)")
+        st.line_chart(otd)

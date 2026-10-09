@@ -189,3 +189,49 @@ def load_history(backend):
 
 def load_oos(backend):
     return backend.read(OOS_SHEET)
+
+
+# ======================================================================
+# Growth MDS (tambahan): snapshot report MDS per toko per tanggal
+# ======================================================================
+MDS_SHEET = "mds"
+MDS_KEYS = ["KD_STORE", "TANGGAL"]
+
+
+def build_mds(res):
+    """Hasil mds_report.build() -> tabel snapshot (1 baris = 1 toko MDS x 1 tanggal)."""
+    s = res["summary"].rename(columns={"Kode Toko": "KD_STORE",
+                                       "Nama Toko": "NAMA_STORE",
+                                       "Cabang": "NAMA_BRANCH"}).copy()
+    s["KD_STORE"] = s["KD_STORE"].astype(str).str.strip()
+    s["TANGGAL"] = pd.Timestamp(res["tgl"]).strftime("%Y-%m-%d")
+    first = ["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "TANGGAL"]
+    rest = [c for c in s.columns if c not in first]
+    return s[first + rest].drop_duplicates(MDS_KEYS, keep="last").reset_index(drop=True)
+
+
+def save_mds(res, backend, log=print):
+    n, total = upsert(backend, MDS_SHEET, build_mds(res), MDS_KEYS)
+    log(f"[Penyimpanan] mds: {n} baris diproses, total tersimpan {total}")
+
+
+def save_mds_if_configured(res, log=print, backend=None):
+    """Simpan snapshot MDS kalau penyimpanan sudah diatur. TIDAK PERNAH melempar error."""
+    try:
+        backend = backend or get_backend_from_streamlit()
+        if backend is None:
+            log("[Penyimpanan] MDS dilewati (secrets belum diatur)")
+            return False
+        save_mds(res, backend, log)
+        return True
+    except Exception as e:  # noqa: BLE001
+        log(f"[Penyimpanan] MDS GAGAL, report tetap dibuat: {type(e).__name__}: {e}")
+        return False
+
+
+def load_mds(backend):
+    m = backend.read(MDS_SHEET)
+    if m.empty:
+        return m
+    m["TANGGAL"] = pd.to_datetime(m["TANGGAL"])
+    return m
