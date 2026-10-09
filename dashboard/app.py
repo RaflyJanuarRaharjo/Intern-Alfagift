@@ -45,13 +45,14 @@ check_password()
 def load():
     backend = storage.get_backend_from_streamlit()
     if backend is None:
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None
     return (storage.load_history(backend), storage.load_oos(backend),
             storage.load_mds(backend), storage.load_mds_history(backend),
-            storage.load_mds_sla(backend), storage.load_ds_sla(backend))
+            storage.load_mds_sla(backend), storage.load_ds_sla(backend),
+            storage.load_ds_sla_daily(backend))
 
 
-hist, oos, mds, mds_hist, mds_sla, ds_sla = load()
+hist, oos, mds, mds_hist, mds_sla, ds_sla, ds_sla_daily = load()
 if hist is None:
     st.error("Penyimpanan belum diatur (secrets `gcp_service_account` dan `storage.spreadsheet_id`).")
     st.stop()
@@ -199,8 +200,56 @@ def page_ds():
         st.dataframe(styled(o.sort_values("% OOS OFMB", ascending=False), pct_cols=oos_cols, pct_dec=2),
                      use_container_width=True, hide_index=True)
 
+    # ---- OTD / LATE harian (dari file SLA DS)
+    if ds_sla_daily is not None and not ds_sla_daily.empty:
+        st.subheader("OTD dan LATE")
+        names = hist.drop_duplicates("KD_STORE", keep="last")[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH"]]
+        dsl = ds_sla_daily.merge(names, on="KD_STORE", how="left")
+        if cabang:
+            dsl = dsl[dsl["NAMA_BRANCH"].isin(cabang)]
+        dsl = apply_search(dsl, q)
+        sdd = dsl["TANGGAL"].dt.normalize()
+        sla_cols = ["DELIVERY_ONTIME", "DELIVERY_LATE", "JUMLAH_DELIVERY"]
+        day_sl = dsl[sdd == as_of]
+        mtd_sl = dsl[(sdd >= month_start) & (sdd <= as_of)]
+
+        def _pct(df, col):
+            tot = df["JUMLAH_DELIVERY"].sum()
+            return df[col].sum() / tot * 100 if tot else float("nan")
+
+        o1, o2, o3, o4 = st.columns(4)
+        o1.metric(f"%OTD {as_of.strftime('%d %b')}", fmt_pct(_pct(day_sl, "DELIVERY_ONTIME")))
+        o2.metric(f"%LATE {as_of.strftime('%d %b')}", fmt_pct(_pct(day_sl, "DELIVERY_LATE")))
+        o3.metric("%OTD MTD", fmt_pct(_pct(mtd_sl, "DELIVERY_ONTIME")))
+        o4.metric("%LATE MTD", fmt_pct(_pct(mtd_sl, "DELIVERY_LATE")))
+
+        dly = dsl.groupby(sdd)[sla_cols].sum()
+        if len(dly) > 1:
+            st.caption("Tren harian (%)")
+            st.line_chart(pd.DataFrame({
+                "%OTD": dly["DELIVERY_ONTIME"] / dly["JUMLAH_DELIVERY"].replace(0, float("nan")) * 100,
+                "%LATE": dly["DELIVERY_LATE"] / dly["JUMLAH_DELIVERY"].replace(0, float("nan")) * 100,
+            }))
+
+        d1 = day_sl.groupby("KD_STORE")[sla_cols].sum()
+        d2 = mtd_sl.groupby("KD_STORE")[sla_cols].sum()
+        den1 = d1["JUMLAH_DELIVERY"].replace(0, float("nan"))
+        den2 = d2["JUMLAH_DELIVERY"].replace(0, float("nan"))
+        per_store = pd.DataFrame({
+            "JUMLAH_DELIVERY": d1["JUMLAH_DELIVERY"],
+            "%OTD": d1["DELIVERY_ONTIME"] / den1 * 100,
+            "%LATE": d1["DELIVERY_LATE"] / den1 * 100,
+            "%OTD MTD": d2["DELIVERY_ONTIME"] / den2 * 100,
+            "%LATE MTD": d2["DELIVERY_LATE"] / den2 * 100,
+        }).reset_index().merge(names, on="KD_STORE", how="left")
+        per_store = per_store[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "JUMLAH_DELIVERY",
+                               "%OTD", "%LATE", "%OTD MTD", "%LATE MTD"]].sort_values("%OTD")
+        st.caption(f"Per toko, {as_of.strftime('%d %b %Y')}")
+        st.dataframe(styled(per_store, ["JUMLAH_DELIVERY"], ["%OTD", "%LATE", "%OTD MTD", "%LATE MTD"]),
+                     use_container_width=True, hide_index=True)
+
     # ---- OTD / LATE (dari Report Summary, 1 snapshot per periode)
-    if ds_sla is not None and not ds_sla.empty:
+    elif ds_sla is not None and not ds_sla.empty:
         st.subheader("OTD dan LATE (Report Summary)")
         names = hist.drop_duplicates("KD_STORE", keep="last")[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH"]]
         allp = ds_sla.merge(names, on="KD_STORE", how="left")
@@ -414,7 +463,21 @@ def page_compare():
         }).reset_index()
         tab = tab.merge(otd, on="KD_STORE", how="left")
 
-    if sumber == "Growth DS" and ds_sla is not None and not ds_sla.empty:
+    if sumber == "Growth DS" and ds_sla_daily is not None and not ds_sla_daily.empty:
+        sl = ds_sla_daily[ds_sla_daily["KD_STORE"].isin(codes)]
+        sd = sl["TANGGAL"].dt.normalize()
+        cols_sla = ["DELIVERY_ONTIME", "DELIVERY_LATE", "JUMLAH_DELIVERY"]
+        d1 = sl[sd == as_of].groupby("KD_STORE")[cols_sla].sum()
+        d2 = sl[(sd >= month_start) & (sd <= as_of)].groupby("KD_STORE")[cols_sla].sum()
+        den1 = d1["JUMLAH_DELIVERY"].replace(0, float("nan"))
+        den2 = d2["JUMLAH_DELIVERY"].replace(0, float("nan"))
+        otd = pd.DataFrame({
+            "%OTD": d1["DELIVERY_ONTIME"] / den1 * 100,
+            "%LATE": d1["DELIVERY_LATE"] / den1 * 100,
+            "%OTD MTD": d2["DELIVERY_ONTIME"] / den2 * 100,
+        }).reset_index()
+        tab = tab.merge(otd, on="KD_STORE", how="left")
+    elif sumber == "Growth DS" and ds_sla is not None and not ds_sla.empty:
         ok = ds_sla[ds_sla["PERIODE_END"].dt.normalize() <= as_of]
         if not ok.empty:
             last_per = ok["PERIODE_END"].max()
