@@ -45,13 +45,13 @@ check_password()
 def load():
     backend = storage.get_backend_from_streamlit()
     if backend is None:
-        return None, None, None, None, None
+        return None, None, None, None, None, None
     return (storage.load_history(backend), storage.load_oos(backend),
             storage.load_mds(backend), storage.load_mds_history(backend),
-            storage.load_mds_sla(backend))
+            storage.load_mds_sla(backend), storage.load_ds_sla(backend))
 
 
-hist, oos, mds, mds_hist, mds_sla = load()
+hist, oos, mds, mds_hist, mds_sla, ds_sla = load()
 if hist is None:
     st.error("Penyimpanan belum diatur (secrets `gcp_service_account` dan `storage.spreadsheet_id`).")
     st.stop()
@@ -198,6 +198,39 @@ def page_ds():
                 o[col] = o[col] * 100
         st.dataframe(styled(o.sort_values("% OOS OFMB", ascending=False), pct_cols=oos_cols, pct_dec=2),
                      use_container_width=True, hide_index=True)
+
+    # ---- OTD / LATE (dari Report Summary, 1 snapshot per periode)
+    if ds_sla is not None and not ds_sla.empty:
+        st.subheader("OTD dan LATE (Report Summary)")
+        names = hist.drop_duplicates("KD_STORE", keep="last")[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH"]]
+        allp = ds_sla.merge(names, on="KD_STORE", how="left")
+        if cabang:
+            allp = allp[allp["NAMA_BRANCH"].isin(cabang)]
+        allp = apply_search(allp, q)
+        periods = sorted(ds_sla["PERIODE_END"].dt.normalize().unique())
+        per = st.selectbox("Periode (s.d. tanggal)", periods[::-1], key="per_ds_sla",
+                           format_func=lambda d: pd.Timestamp(d).strftime("%d %b %Y"))
+        sl = allp[allp["PERIODE_END"].dt.normalize() == pd.Timestamp(per)].copy()
+        tot = sl["JUMLAH_DELIVERY"].sum()
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Jumlah delivery", fmt_num(tot))
+        s2.metric("%OTD", fmt_pct(sl["DELIVERY_ONTIME"].sum() / tot * 100) if tot else "-")
+        s3.metric("%LATE", fmt_pct(sl["DELIVERY_LATE"].sum() / tot * 100) if tot else "-")
+        den = sl["JUMLAH_DELIVERY"].replace(0, float("nan"))
+        sl["%OTD"] = sl["DELIVERY_ONTIME"] / den * 100
+        sl["%LATE"] = sl["DELIVERY_LATE"] / den * 100
+        tbl = sl[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "JUMLAH_DELIVERY", "DELIVERY_ONTIME",
+                  "DELIVERY_LATE", "%OTD", "%LATE"]].sort_values("%OTD")
+        st.dataframe(styled(tbl, ["JUMLAH_DELIVERY", "DELIVERY_ONTIME", "DELIVERY_LATE"], ["%OTD", "%LATE"]),
+                     use_container_width=True, hide_index=True)
+        if len(periods) > 1:
+            agg = allp.groupby(allp["PERIODE_END"].dt.strftime("%d %b %Y"), sort=False)[
+                ["JUMLAH_DELIVERY", "DELIVERY_ONTIME", "DELIVERY_LATE"]].sum()
+            st.caption("Perbandingan antar periode (%)")
+            st.bar_chart(pd.DataFrame({
+                "%OTD": agg["DELIVERY_ONTIME"] / agg["JUMLAH_DELIVERY"] * 100,
+                "%LATE": agg["DELIVERY_LATE"] / agg["JUMLAH_DELIVERY"] * 100,
+            }))
 
 
 # ================================================================ HALAMAN: MDS
@@ -381,6 +414,17 @@ def page_compare():
         }).reset_index()
         tab = tab.merge(otd, on="KD_STORE", how="left")
 
+    if sumber == "Growth DS" and ds_sla is not None and not ds_sla.empty:
+        ok = ds_sla[ds_sla["PERIODE_END"].dt.normalize() <= as_of]
+        if not ok.empty:
+            last_per = ok["PERIODE_END"].max()
+            one = ok[(ok["PERIODE_END"] == last_per) & ok["KD_STORE"].isin(codes)].copy()
+            den = one["JUMLAH_DELIVERY"].replace(0, float("nan"))
+            one["%OTD"] = one["DELIVERY_ONTIME"] / den * 100
+            one["%LATE"] = one["DELIVERY_LATE"] / den * 100
+            tab = tab.merge(one[["KD_STORE", "%OTD", "%LATE"]], on="KD_STORE", how="left")
+            st.caption(f"%OTD dan %LATE dari Report Summary periode s.d. {last_per.strftime('%d %b %Y')}")
+
     for c in ["Growth DoD", "Growth WoW", "Growth MTD", "PERCENT_GM", "PCT_OOS_OFMB", "PERCENT_GM MTD"]:
         if c in tab.columns:
             tab[c] = tab[c] * 100
@@ -389,9 +433,10 @@ def page_compare():
 
     order = ["Toko", "NAMA_BRANCH", "Sales", "Growth DoD", "Growth WoW", "MTD", "MTD bulan lalu",
              "Growth MTD", "JHK", "SPD", "STD", "APC", "%GM", "%OOS OFMB",
-             "SPD MTD", "STD MTD", "APC MTD", "%GM MTD", "%OTD", "%OTD MTD"]
+             "SPD MTD", "STD MTD", "APC MTD", "%GM MTD", "%OTD", "%OTD MTD", "%LATE"]
     tab = tab[[c for c in order if c in tab.columns]]
-    pct_cols = ["Growth DoD", "Growth WoW", "Growth MTD", "%GM", "%OOS OFMB", "%GM MTD", "%OTD", "%OTD MTD"]
+    pct_cols = ["Growth DoD", "Growth WoW", "Growth MTD", "%GM", "%OOS OFMB", "%GM MTD", "%OTD", "%OTD MTD",
+                "%LATE"]
     int_cols = ["Sales", "MTD", "MTD bulan lalu", "JHK", "SPD", "STD", "APC", "SPD MTD", "STD MTD", "APC MTD"]
 
     st.subheader(f"Perbandingan per {as_of.strftime('%d %b %Y')}")
