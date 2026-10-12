@@ -136,6 +136,21 @@ SPD_INT = ["SPD", "SPD MTD", "SPD MTD bulan lalu"]
 SPD_PCT = ["Growth SPD DoD", "Growth SPD WoW", "Growth SPD MTD"]
 
 
+def show_spd_growth(g, title="Growth SPD per toko"):
+    """Tabel growth SPD per toko (hasil compute_growth)."""
+    if "Growth SPD MTD" not in g.columns:
+        return
+    st.subheader(title)
+    st.caption("DoD/WoW: SPD hari itu vs H-1/H-7. MTD: rata-rata SPD harian bulan ini vs "
+               "rata-rata SPD harian rentang tanggal yang sama bulan lalu.")
+    spd = g.copy()
+    for col in SPD_PCT:
+        spd[col] = spd[col] * 100
+    spd = spd.sort_values("SPD MTD", ascending=False, na_position="last")
+    st.dataframe(styled(spd[SPD_COLS], SPD_INT, SPD_PCT),
+                 use_container_width=True, hide_index=True)
+
+
 # ================================================================ HALAMAN: GROWTH DS
 def page_ds():
     st.title("Dashboard Performance Darkstore")
@@ -190,16 +205,7 @@ def page_ds():
     st.dataframe(styled(show[GROWTH_COLS], GROWTH_INT, GROWTH_PCT),
                  use_container_width=True, hide_index=True)
 
-    if "Growth SPD MTD" in g.columns:
-        st.subheader("Growth SPD per toko")
-        st.caption("DoD/WoW: SPD hari itu vs H-1/H-7. MTD: rata-rata SPD harian bulan ini vs "
-                   "rata-rata SPD harian rentang tanggal yang sama bulan lalu.")
-        spd = g.copy()
-        for col in SPD_PCT:
-            spd[col] = spd[col] * 100
-        spd = spd.sort_values("SPD MTD", ascending=False, na_position="last")
-        st.dataframe(styled(spd[SPD_COLS], SPD_INT, SPD_PCT),
-                     use_container_width=True, hide_index=True)
+    show_spd_growth(g)
 
     left, right = st.columns(2)
     with left:
@@ -357,6 +363,8 @@ def page_mds():
         show[col] = show[col] * 100
     st.dataframe(styled(show[GROWTH_COLS], GROWTH_INT, GROWTH_PCT),
                  use_container_width=True, hide_index=True)
+
+    show_spd_growth(gm, "Growth SPD MDS per toko")
 
     # ---- tren harian
     st.subheader("Tren harian MDS")
