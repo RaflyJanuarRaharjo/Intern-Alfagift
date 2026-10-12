@@ -13,8 +13,8 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import storage  # noqa: E402
-from core.growth import (compute_growth, has_previous_month, incomplete_dates,  # noqa: E402
-                         last_complete_date)
+from core.growth import (compute_growth, compute_spd_range, has_previous_month,  # noqa: E402
+                         incomplete_dates, last_complete_date)
 
 st.set_page_config(page_title="Dashboard Darkstore", layout="wide")
 
@@ -136,8 +136,8 @@ SPD_INT = ["SPD", "SPD MTD", "SPD MTD bulan lalu"]
 SPD_PCT = ["Growth SPD DoD", "Growth SPD WoW", "Growth SPD MTD"]
 
 
-def show_spd_growth(g, title="Growth SPD per toko"):
-    """Tabel growth SPD per toko (hasil compute_growth)."""
+def show_spd_growth(g, src, as_of, key, title="Growth SPD per toko"):
+    """Tabel growth SPD per toko (hasil compute_growth) + growth untuk rentang tanggal pilihan."""
     if "Growth SPD MTD" not in g.columns:
         return
     st.subheader(title)
@@ -148,6 +148,37 @@ def show_spd_growth(g, title="Growth SPD per toko"):
         spd[col] = spd[col] * 100
     spd = spd.sort_values("SPD MTD", ascending=False, na_position="last")
     st.dataframe(styled(spd[SPD_COLS], SPD_INT, SPD_PCT),
+                 use_container_width=True, hide_index=True)
+
+    # ---- rentang tanggal bebas
+    st.markdown("**Growth SPD rentang tanggal**")
+    dmin, dmax = src["TANGGAL"].min().date(), src["TANGGAL"].max().date()
+    as_of_d = min(max(pd.Timestamp(as_of).date(), dmin), dmax)
+    default_start = max(as_of_d.replace(day=1), dmin)
+    c1, c2 = st.columns([2, 2])
+    rng = c1.date_input("Rentang tanggal", (default_start, as_of_d), min_value=dmin, max_value=dmax,
+                        key=f"rng_{key}", format="DD/MM/YYYY")
+    mode = c2.radio("Dibandingkan dengan", ["Periode sebelumnya (jumlah hari sama)", "Rentang sama bulan lalu"],
+                    key=f"rngmode_{key}", horizontal=True)
+    if not isinstance(rng, (tuple, list)) or len(rng) != 2:
+        st.caption("Pilih tanggal mulai dan tanggal akhir.")
+        return
+    res = compute_spd_range(src, rng[0], rng[1], "bulan_lalu" if mode.startswith("Rentang") else "sebelumnya")
+    if isinstance(res, pd.DataFrame) or res is None or len(res) != 2 or res[0].empty:
+        st.caption("Tidak ada data SPD pada rentang itu.")
+        return
+    tbl, (p0, p1) = res
+    fmt = lambda d: pd.Timestamp(d).strftime("%d %b %Y")  # noqa: E731
+    st.caption(f"SPD rentang {fmt(rng[0])} - {fmt(rng[1])} vs pembanding {fmt(p0)} - {fmt(p1)}")
+    tot_now, tot_prev = tbl["SPD rentang"].mean(), tbl["SPD pembanding"].mean()
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Rata-rata SPD rentang", fmt_num(tot_now))
+    k2.metric("Rata-rata SPD pembanding", fmt_num(tot_prev))
+    k3.metric("Growth SPD", fmt_pct((tot_now / tot_prev - 1) * 100) if tot_prev and not pd.isna(tot_prev) else "-")
+    tbl = tbl.copy()
+    tbl["Growth SPD rentang"] = tbl["Growth SPD rentang"] * 100
+    st.dataframe(styled(tbl[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "SPD rentang", "SPD pembanding",
+                             "Growth SPD rentang"]], ["SPD rentang", "SPD pembanding"], ["Growth SPD rentang"]),
                  use_container_width=True, hide_index=True)
 
 
@@ -205,7 +236,7 @@ def page_ds():
     st.dataframe(styled(show[GROWTH_COLS], GROWTH_INT, GROWTH_PCT),
                  use_container_width=True, hide_index=True)
 
-    show_spd_growth(g)
+    show_spd_growth(g, view, as_of, "ds")
 
     left, right = st.columns(2)
     with left:
@@ -364,7 +395,7 @@ def page_mds():
     st.dataframe(styled(show[GROWTH_COLS], GROWTH_INT, GROWTH_PCT),
                  use_container_width=True, hide_index=True)
 
-    show_spd_growth(gm, "Growth SPD MDS per toko")
+    show_spd_growth(gm, mh, as_of, "mds", "Growth SPD MDS per toko")
 
     # ---- tren harian
     st.subheader("Tren harian MDS")

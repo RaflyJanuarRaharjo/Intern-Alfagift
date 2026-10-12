@@ -109,3 +109,34 @@ def last_complete_date(hist, **kw):
     bad = set(incomplete_dates(hist, **kw))
     days = [d for d in sorted(hist["TANGGAL"].dt.normalize().unique()) if pd.Timestamp(d) not in bad]
     return pd.Timestamp(days[-1]) if days else None
+
+
+def compute_spd_range(hist, start, end, pembanding="sebelumnya"):
+    """Growth rata-rata SPD per toko untuk rentang tanggal [start, end].
+
+    pembanding:
+      "sebelumnya"  -> periode tepat sebelum start dengan jumlah hari sama
+      "bulan_lalu"  -> rentang tanggal yang sama di bulan sebelumnya
+    Rata-rata SPD = rata-rata SPD harian toko pada rentang itu.
+    Pembanding kosong / 0 -> growth NaN.
+    """
+    if hist.empty or "SPD" not in hist.columns:
+        return pd.DataFrame()
+    start, end = pd.Timestamp(start).normalize(), pd.Timestamp(end).normalize()
+    if pembanding == "bulan_lalu":
+        p_start, p_end = start - pd.DateOffset(months=1), end - pd.DateOffset(months=1)
+    else:
+        n = (end - start).days + 1
+        p_end = start - pd.Timedelta(days=1)
+        p_start = p_end - pd.Timedelta(days=n - 1)
+
+    master = (hist.sort_values("TANGGAL")
+              .drop_duplicates("KD_STORE", keep="last")[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH"]]
+              .set_index("KD_STORE"))
+    out = master.copy()
+    out["SPD rentang"] = _spd_between(hist, start, end)
+    out["SPD pembanding"] = _spd_between(hist, p_start, p_end)
+    out["Growth SPD rentang"] = _growth(out["SPD rentang"], out["SPD pembanding"])
+    out = out.dropna(subset=["SPD rentang"])
+    return (out.reset_index().sort_values("SPD rentang", ascending=False, na_position="last")
+               .reset_index(drop=True)), (p_start, p_end)
