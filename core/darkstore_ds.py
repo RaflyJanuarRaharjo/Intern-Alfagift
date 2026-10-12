@@ -473,6 +473,17 @@ def run(paths, output_dir, with_delivery=False, report_summary_path=None,
     log(f"OOS By Toko: {len(df_oos)} toko")
     from .storage import save_if_configured
     save_if_configured(df_detail, df_oos, log)
+    try:
+        from .storage import save_ds_sla_daily_if_configured
+        _sla_csv = next((p for p in paths if str(p).lower().endswith('.csv')
+                         and 'sla' in os.path.basename(p).lower()), None)
+        if _sla_csv:
+            log('File SLA DS  :', os.path.basename(_sla_csv))
+            save_ds_sla_daily_if_configured(_sla_csv, log)
+        else:
+            log('[Penyimpanan] OTD/LATE harian DS dilewati (tidak ada file SLA .csv di upload)')
+    except Exception as e:  # noqa: BLE001
+        log(f'[Penyimpanan] DS SLA harian GAGAL, report tetap dibuat: {type(e).__name__}: {e}')
     if with_delivery:
         try:
             from .storage import save_ds_sla_if_configured

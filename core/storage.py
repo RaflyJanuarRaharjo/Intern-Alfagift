@@ -281,3 +281,49 @@ def load_mds_sla(backend):
         return s
     s["TANGGAL"] = pd.to_datetime(s["TANGGAL"])
     return s
+
+
+# ======================================================================
+# OTD / LATE harian DS (tambahan): dari file SLA .csv (per toko per tanggal)
+# ======================================================================
+DS_SLA_DAILY_SHEET = "ds_sla_daily"
+DS_SLA_DAILY_KEYS = ["KD_STORE", "TANGGAL"]
+
+
+def build_ds_sla_daily(csv_path):
+    """File Detail Data SLA (CSV) -> ringkasan per toko DS per tanggal."""
+    s = pd.read_csv(csv_path, encoding="utf-8-sig", dtype={"KD_STORE": str})
+    s.columns = [str(c).strip() for c in s.columns]
+    if "NAMA_STORE" in s.columns:
+        s = s[s["NAMA_STORE"].astype(str).str.upper().str.startswith("DS")]
+    val = ["DELIVERY_ONTIME", "DELIVERY_LATE", "JUMLAH_DELIVERY"]
+    for c in val:
+        s[c] = pd.to_numeric(s[c], errors="coerce").fillna(0)
+    s["KD_STORE"] = s["KD_STORE"].astype(str).str.strip()
+    s["TANGGAL"] = pd.to_datetime(s["TANGGAL"], errors="coerce").dt.strftime("%Y-%m-%d")
+    s = s.dropna(subset=["TANGGAL"])
+    out = s.groupby(DS_SLA_DAILY_KEYS, as_index=False)[val].sum()
+    return out.sort_values(DS_SLA_DAILY_KEYS).reset_index(drop=True)
+
+
+def save_ds_sla_daily_if_configured(csv_path, log=print, backend=None):
+    """Simpan OTD/LATE harian DS kalau penyimpanan sudah diatur. TIDAK PERNAH melempar error."""
+    try:
+        backend = backend or get_backend_from_streamlit()
+        if backend is None:
+            log("[Penyimpanan] DS SLA harian dilewati (secrets belum diatur)")
+            return False
+        n, total = upsert(backend, DS_SLA_DAILY_SHEET, build_ds_sla_daily(csv_path), DS_SLA_DAILY_KEYS)
+        log(f"[Penyimpanan] ds_sla_daily: {n} baris diproses, total tersimpan {total}")
+        return True
+    except Exception as e:  # noqa: BLE001
+        log(f"[Penyimpanan] DS SLA harian GAGAL, report tetap dibuat: {type(e).__name__}: {e}")
+        return False
+
+
+def load_ds_sla_daily(backend):
+    s = backend.read(DS_SLA_DAILY_SHEET)
+    if s.empty:
+        return s
+    s["TANGGAL"] = pd.to_datetime(s["TANGGAL"])
+    return s
