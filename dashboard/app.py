@@ -130,6 +130,10 @@ GROWTH_COLS = ["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "Sales", "Growth DoD", "
                "MTD", "MTD bulan lalu", "Growth MTD"]
 GROWTH_INT = ["Sales", "MTD", "MTD bulan lalu"]
 GROWTH_PCT = ["Growth DoD", "Growth WoW", "Growth MTD"]
+SPD_COLS = ["KD_STORE", "NAMA_STORE", "NAMA_BRANCH", "SPD", "Growth SPD DoD", "Growth SPD WoW",
+            "SPD MTD", "SPD MTD bulan lalu", "Growth SPD MTD"]
+SPD_INT = ["SPD", "SPD MTD", "SPD MTD bulan lalu"]
+SPD_PCT = ["Growth SPD DoD", "Growth SPD WoW", "Growth SPD MTD"]
 
 
 # ================================================================ HALAMAN: GROWTH DS
@@ -185,6 +189,17 @@ def page_ds():
         show[col] = show[col] * 100
     st.dataframe(styled(show[GROWTH_COLS], GROWTH_INT, GROWTH_PCT),
                  use_container_width=True, hide_index=True)
+
+    if "Growth SPD MTD" in g.columns:
+        st.subheader("Growth SPD per toko")
+        st.caption("DoD/WoW: SPD hari itu vs H-1/H-7. MTD: rata-rata SPD harian bulan ini vs "
+                   "rata-rata SPD harian rentang tanggal yang sama bulan lalu.")
+        spd = g.copy()
+        for col in SPD_PCT:
+            spd[col] = spd[col] * 100
+        spd = spd.sort_values("SPD MTD", ascending=False, na_position="last")
+        st.dataframe(styled(spd[SPD_COLS], SPD_INT, SPD_PCT),
+                     use_container_width=True, hide_index=True)
 
     left, right = st.columns(2)
     with left:

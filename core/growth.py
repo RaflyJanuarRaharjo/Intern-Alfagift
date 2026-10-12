@@ -1,4 +1,4 @@
-"""Hitung growth Sales per toko dari riwayat (DoD, WoW, MTD vs bulan lalu).
+"""Hitung growth Sales dan SPD per toko dari riwayat (DoD, WoW, MTD vs bulan lalu).
 
 Growth = (sekarang - pembanding) / pembanding.
 Kalau pembanding 0 / kosong -> hasil dikosongkan (NaN), bukan dipaksa jadi angka.
@@ -24,6 +24,16 @@ def _sales_on(hist, day):
 def _sales_between(hist, start, end):
     m = hist["TANGGAL"].dt.normalize().between(pd.Timestamp(start), pd.Timestamp(end))
     return hist.loc[m].groupby("KD_STORE")["SALES"].sum()
+
+
+def _spd_on(hist, day):
+    m = hist["TANGGAL"].dt.normalize() == pd.Timestamp(day).normalize()
+    return hist.loc[m].groupby("KD_STORE")["SPD"].mean()
+
+
+def _spd_between(hist, start, end):
+    m = hist["TANGGAL"].dt.normalize().between(pd.Timestamp(start), pd.Timestamp(end))
+    return hist.loc[m].groupby("KD_STORE")["SPD"].mean()
 
 
 def compute_growth(hist, as_of=None):
@@ -55,6 +65,17 @@ def compute_growth(hist, as_of=None):
     prev_mtd = _sales_between(hist, prev_start, prev_end)
     out["MTD bulan lalu"] = prev_mtd
     out["Growth MTD"] = _growth(out["MTD"], out["MTD bulan lalu"])
+
+    # ---- SPD: DoD / WoW pakai SPD harian; MTD pakai rata-rata SPD harian (sama dengan kartu "Rata-rata SPD (MTD)")
+    if "SPD" in hist.columns:
+        out["SPD"] = _spd_on(hist, as_of)
+        out["SPD kemarin"] = _spd_on(hist, as_of - pd.Timedelta(days=1))
+        out["SPD 7 hari lalu"] = _spd_on(hist, as_of - pd.Timedelta(days=7))
+        out["Growth SPD DoD"] = _growth(out["SPD"], out["SPD kemarin"])
+        out["Growth SPD WoW"] = _growth(out["SPD"], out["SPD 7 hari lalu"])
+        out["SPD MTD"] = _spd_between(hist, month_start, as_of)
+        out["SPD MTD bulan lalu"] = _spd_between(hist, prev_start, prev_end)
+        out["Growth SPD MTD"] = _growth(out["SPD MTD"], out["SPD MTD bulan lalu"])
 
     return out.reset_index().sort_values("MTD", ascending=False, na_position="last").reset_index(drop=True)
 
