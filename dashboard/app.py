@@ -137,56 +137,60 @@ def chart_short(data, kind="line"):
         (st.line_chart if kind == "line" else st.bar_chart)(data)
 
 
-def otd_conclusion(sm):
-    """Kesimpulan teks dari core.growth.otd_growth_summary()."""
+def _delta_pp(cur, prev):
+    return cur - prev if not (pd.isna(cur) or pd.isna(prev)) else float("nan")
+
+
+def show_otd_summary(sm):
+    """Kartu %OTD / %LATE (harian & MTD) dengan growth (poin) + kesimpulan singkat."""
     fl = sm["flat_pp"]
-    ov = sm["overall"]
+    ov, lt = sm["overall"], sm["overall_late"]
     tgl = sm["as_of"].strftime("%d %b")
     kem = sm["kemarin"].strftime("%d %b")
     lalu = f"{sm['prev_start'].strftime('%d')}-{sm['prev_end'].strftime('%d %b')}"
 
+    def delta(dv, inverse=False):
+        if pd.isna(dv):
+            return None, "normal"
+        if abs(dv) < 0.1:
+            return fmt_pp(dv), "off"
+        return fmt_pp(dv), ("inverse" if inverse else "normal")
+
+    d_otd, d_late = _delta_pp(ov["hari"], ov["kemarin"]), _delta_pp(lt["hari"], lt["kemarin"])
+    m_otd, m_late = _delta_pp(ov["mtd"], ov["mtd_lalu"]), _delta_pp(lt["mtd"], lt["mtd_lalu"])
+
+    c1, c2, c3, c4 = st.columns(4)
+    for col, label, val, dv, inv, help_ in (
+            (c1, f"%OTD {tgl}", ov["hari"], d_otd, False, f"Selisih vs {kem}"),
+            (c2, f"%LATE {tgl}", lt["hari"], d_late, True, f"Selisih vs {kem}"),
+            (c3, "%OTD MTD", ov["mtd"], m_otd, False, f"Selisih vs bulan lalu rentang sama ({lalu})"),
+            (c4, "%LATE MTD", lt["mtd"], m_late, True, f"Selisih vs bulan lalu rentang sama ({lalu})")):
+        dtxt, dcol = delta(dv, inv)
+        col.metric(label, fmt_pct(val), delta=dtxt, delta_color=dcol, help=help_)
+
     def arah(dv, th=0.1):
         return "naik" if dv > th else ("turun" if dv < -th else "relatif stabil")
 
-    def gerak(dv, th=0.1):
-        """'naik 1,4 poin' / 'turun 2,7 poin' / 'relatif stabil (+0,0 poin)'"""
-        a = arah(dv, th)
-        return f"{a} {fmt_num(abs(dv), 1, short=False)} poin" if a != "relatif stabil" else f"{a} ({fmt_pp(dv)})"
-
+    ref, basis = (m_otd, "MTD vs bulan lalu") if not pd.isna(m_otd) else (d_otd, "harian vs kemarin")
     out = []
-    dod = ov["hari"] - ov["kemarin"] if not (pd.isna(ov["hari"]) or pd.isna(ov["kemarin"])) else float("nan")
-    mtd = ov["mtd"] - ov["mtd_lalu"] if not (pd.isna(ov["mtd"]) or pd.isna(ov["mtd_lalu"])) else float("nan")
-
-    ref = mtd if not pd.isna(mtd) else dod
     if pd.isna(ref):
         out.append("**Kesimpulan:** belum ada pembanding yang cukup untuk menilai growth %OTD.")
     else:
         verdict = {"naik": "membaik", "turun": "memburuk", "relatif stabil": "relatif stabil"}[arah(ref)]
-        basis = "MTD vs bulan lalu" if not pd.isna(mtd) else "harian vs kemarin"
-        out.append(f"**Kesimpulan:** %OTD MDS secara keseluruhan **{verdict}** ({basis}).")
-
+        out.append(f"**Kesimpulan:** %OTD MDS **{verdict}** ({basis}, {fmt_pp(ref)}).")
     if pd.isna(ov["hari"]):
-        out.append(f"- Harian: belum ada data SLA pada {tgl}.")
-    elif pd.isna(dod):
-        out.append(f"- Harian: %OTD {tgl} = {fmt_pct(ov['hari'])} (tidak ada data pembanding {kem}).")
-    else:
-        out.append(f"- Harian: %OTD {tgl} = {fmt_pct(ov['hari'])}, {gerak(dod)} "
-                   f"dibanding {kem} ({fmt_pct(ov['kemarin'])}).")
-    if pd.isna(ov["mtd"]):
-        out.append("- MTD: belum ada data SLA bulan ini.")
-    elif pd.isna(mtd):
-        out.append(f"- MTD: %OTD = {fmt_pct(ov['mtd'])} (riwayat SLA bulan lalu belum tersimpan, "
-                   "jadi growth MTD belum bisa dihitung).")
-    else:
-        out.append(f"- MTD: %OTD = {fmt_pct(ov['mtd'])}, {gerak(mtd)} "
-                   f"dibanding bulan lalu rentang sama {lalu} ({fmt_pct(ov['mtd_lalu'])}).")
+        out.append(f"- Belum ada data SLA pada {tgl}.")
+    elif pd.isna(d_otd):
+        out.append(f"- Tidak ada data pembanding harian ({kem}).")
+    if pd.isna(m_otd):
+        out.append("- Riwayat SLA bulan lalu belum tersimpan, jadi growth MTD belum bisa dihitung.")
 
     def toko_line(label, t):
         if t.empty:
             return None
         naik, turun = int((t["selisih"] > fl).sum()), int((t["selisih"] < -fl).sum())
-        stabil = len(t) - naik - turun
-        txt = f"- Per toko ({label}, {len(t)} toko): {naik} naik, {turun} turun, {stabil} stabil (batas ±{fmt_num(fl, 1, short=False)} poin)."
+        txt = (f"- Per toko ({label}, {len(t)} toko): {naik} naik, {turun} turun, "
+               f"{len(t) - naik - turun} stabil (batas ±{fmt_num(fl, 1, short=False)} poin).")
         top, bot = t.iloc[0], t.iloc[-1]
         if top["selisih"] > fl:
             txt += f" Naik terbesar: {top['NAMA_STORE']} ({fmt_pp(top['selisih'])})."
@@ -198,7 +202,7 @@ def otd_conclusion(sm):
         ln = toko_line(label, sm[key])
         if ln:
             out.append(ln)
-    return "\n".join(out)
+    st.markdown("\n".join(out))
 
 
 def styled(df, int_cols=(), pct_cols=(), pct_dec=1):
@@ -537,7 +541,7 @@ def page_mds():
         sl = mds_sla if not cabang else mds_sla[mds_sla["NAMA_BRANCH"].isin(cabang)]
         sl = apply_search(sl, q)
         st.subheader("OTD dan LATE")
-        st.markdown(otd_conclusion(otd_growth_summary(sl, as_of)))
+        show_otd_summary(otd_growth_summary(sl, as_of))
         daily = sl.groupby(sl["TANGGAL"].dt.normalize())[
             ["DELIVERY_ONTIME", "DELIVERY_LATE", "JUMLAH_DELIVERY"]].sum()
         trend = pd.DataFrame({
