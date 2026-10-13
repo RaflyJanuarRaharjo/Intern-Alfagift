@@ -109,3 +109,78 @@ def last_complete_date(hist, **kw):
     bad = set(incomplete_dates(hist, **kw))
     days = [d for d in sorted(hist["TANGGAL"].dt.normalize().unique()) if pd.Timestamp(d) not in bad]
     return pd.Timestamp(days[-1]) if days else None
+
+
+def compute_spd_range(hist, start, end, pembanding="sebelumnya"):
+    """Growth rata-rata SPD per toko untuk rentang tanggal [start, end].
+
+    pembanding:
+      "sebelumnya"  -> periode tepat sebelum start dengan jumlah hari sama
+      "bulan_lalu"  -> rentang tanggal yang sama di bulan sebelumnya
+    Rata-rata SPD = rata-rata SPD harian toko pada rentang itu.
+    Pembanding kosong / 0 -> growth NaN.
+    """
+    if hist.empty or "SPD" not in hist.columns:
+        return pd.DataFrame()
+    start, end = pd.Timestamp(start).normalize(), pd.Timestamp(end).normalize()
+    if pembanding == "bulan_lalu":
+        p_start, p_end = start - pd.DateOffset(months=1), end - pd.DateOffset(months=1)
+    else:
+        n = (end - start).days + 1
+        p_end = start - pd.Timedelta(days=1)
+        p_start = p_end - pd.Timedelta(days=n - 1)
+
+    master = (hist.sort_values("TANGGAL")
+              .drop_duplicates("KD_STORE", keep="last")[["KD_STORE", "NAMA_STORE", "NAMA_BRANCH"]]
+              .set_index("KD_STORE"))
+    out = master.copy()
+    out["SPD rentang"] = _spd_between(hist, start, end)
+    out["SPD pembanding"] = _spd_between(hist, p_start, p_end)
+    out["Growth SPD rentang"] = _growth(out["SPD rentang"], out["SPD pembanding"])
+    out = out.dropna(subset=["SPD rentang"])
+    return (out.reset_index().sort_values("SPD rentang", ascending=False, na_position="last")
+               .reset_index(drop=True)), (p_start, p_end)
+
+
+def otd_growth_summary(sla, as_of, flat_pp=0.5):
+    """Ringkasan growth %OTD (selisih dalam poin persentase) dari tabel SLA per toko per tanggal.
+
+    %OTD gabungan = sum(ONTIME) / sum(JUMLAH_DELIVERY) (bukan rata-rata %OTD tiap toko).
+    Dibandingkan: hari ini vs H-1, dan MTD vs MTD bulan lalu (rentang tanggal sama).
+    """
+    as_of = pd.Timestamp(as_of).normalize()
+    cols = ["DELIVERY_ONTIME", "JUMLAH_DELIVERY"]
+    d = sla["TANGGAL"].dt.normalize()
+
+    month_start = as_of.replace(day=1)
+    prev_start = (month_start - pd.Timedelta(days=1)).replace(day=1)
+    day = min(as_of.day, calendar.monthrange(prev_start.year, prev_start.month)[1])
+    prev_end = prev_start.replace(day=day)
+    kemarin = as_of - pd.Timedelta(days=1)
+    periods = {"hari": (as_of, as_of), "kemarin": (kemarin, kemarin),
+               "mtd": (month_start, as_of), "mtd_lalu": (prev_start, prev_end)}
+
+    g = {k: sla[(d >= a) & (d <= b)].groupby("KD_STORE")[cols].sum() for k, (a, b) in periods.items()}
+
+    def total(x):
+        den = x["JUMLAH_DELIVERY"].sum()
+        return x["DELIVERY_ONTIME"].sum() / den * 100 if den > 0 else float("nan")
+
+    def pct(x):
+        return x["DELIVERY_ONTIME"] / x["JUMLAH_DELIVERY"].where(x["JUMLAH_DELIVERY"] > 0) * 100
+
+    names = sla.drop_duplicates("KD_STORE", keep="last").set_index("KD_STORE")["NAMA_STORE"]
+
+    def per_store(cur, prev):
+        df = pd.DataFrame({"sekarang": pct(g[cur]), "pembanding": pct(g[prev])}).dropna()
+        df["selisih"] = df["sekarang"] - df["pembanding"]
+        df["NAMA_STORE"] = names.reindex(df.index)
+        return df.reset_index().sort_values("selisih", ascending=False).reset_index(drop=True)
+
+    return {
+        "as_of": as_of, "kemarin": kemarin, "prev_start": prev_start, "prev_end": prev_end,
+        "overall": {k: total(v) for k, v in g.items()},
+        "toko_dod": per_store("hari", "kemarin"),
+        "toko_mtd": per_store("mtd", "mtd_lalu"),
+        "flat_pp": flat_pp,
+    }
