@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import storage  # noqa: E402
 from core.growth import (compute_growth, compute_spd_range, has_previous_month,  # noqa: E402
-                         incomplete_dates, last_complete_date)
+                         incomplete_dates, last_complete_date, otd_growth_summary)
 
 st.set_page_config(page_title="Dashboard Darkstore", layout="wide")
 
@@ -70,18 +70,135 @@ if hist is None:
 
 
 # ---------------------------------------------------------------- format angka (gaya Indonesia)
-def fmt_num(v, d=0):
-    """1234567.8 -> '1.234.568' (d=0) atau '1.234.567,8' (d=1)."""
+def _id_sep(s):
+    """Tukar pemisah ke gaya Indonesia: 1,234.5 -> 1.234,5"""
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _fmt_short(v, d=2):
+    """Singkat angka besar: 3,99 jt (juta), 90,41 M (miliar), 1,23 T (triliun)."""
+    units = [(1e6, "jt"), (1e9, "M"), (1e12, "T")]
+    a = abs(v)
+    i = max(k for k, (u, _) in enumerate(units) if a >= u)
+    x = a / units[i][0]
+    if round(x, d) >= 1000 and i < len(units) - 1:   # mis. 999,999 jt -> 1,00 M
+        i += 1
+        x = a / units[i][0]
+    return f"{'-' if v < 0 else ''}{_id_sep(f'{x:,.{d}f}')} {units[i][1]}"
+
+
+def fmt_num(v, d=0, short=True):
+    """1234567.8 -> '1,23 jt' (mulai 1 juta, short=True) atau '1.234.568' (d=0) / '1.234.567,8' (d=1)."""
     if v is None or pd.isna(v):
         return "-"
-    s = f"{v:,.{d}f}"
-    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+    if short and abs(v) >= 1e6:
+        return _fmt_short(v)
+    return _id_sep(f"{v:,.{d}f}")
 
 
 def fmt_pct(v, d=1):
     if v is None or pd.isna(v):
         return "-"
-    return fmt_num(v, d) + "%"
+    return fmt_num(v, d, short=False) + "%"
+
+
+def fmt_pp(v, d=1):
+    """Selisih dalam poin persentase dengan tanda: +1,2 poin"""
+    if v is None or pd.isna(v):
+        return "-"
+    return f"{'+' if v > 0 else ''}{fmt_num(v, d, short=False)} poin"
+
+
+_AXIS_SHORT = ("datum.value >= 1e12 ? replace(format(datum.value/1e12, '.2~f'), '.', ',') + ' T' : "
+               "datum.value >= 1e9 ? replace(format(datum.value/1e9, '.2~f'), '.', ',') + ' M' : "
+               "datum.value >= 1e6 ? replace(format(datum.value/1e6, '.2~f'), '.', ',') + ' jt' : "
+               "format(datum.value, ',.0f')")
+
+
+def chart_short(data, kind="line"):
+    """line/bar chart dengan label sumbu-Y disingkat (jt / M / T). Fallback ke chart bawaan Streamlit."""
+    try:
+        import altair as alt
+        df = data.to_frame() if isinstance(data, pd.Series) else data.copy()
+        idx = df.index.name or "index"
+        df.index.name = idx
+        long = df.reset_index().melt(id_vars=idx, var_name="seri", value_name="nilai")
+        is_time = pd.api.types.is_datetime64_any_dtype(long[idx])
+        x = alt.X(f"{idx}:T" if is_time else f"{idx}:N", title=None, **({} if is_time else {"sort": None}))
+        y = alt.Y("nilai:Q", title=None, axis=alt.Axis(labelExpr=_AXIS_SHORT))
+        enc = dict(x=x, y=y, tooltip=[alt.Tooltip(f"{idx}", title="Tanggal/Toko"), "seri",
+                                      alt.Tooltip("nilai:Q", format=",.0f", title="Nilai")])
+        if long["seri"].nunique() > 1:
+            enc["color"] = alt.Color("seri:N", title=None)
+        base = alt.Chart(long)
+        chart = (base.mark_line() if kind == "line" else base.mark_bar()).encode(**enc)
+        st.altair_chart(chart, use_container_width=True)
+    except Exception:  # noqa: BLE001
+        (st.line_chart if kind == "line" else st.bar_chart)(data)
+
+
+def otd_conclusion(sm):
+    """Kesimpulan teks dari core.growth.otd_growth_summary()."""
+    fl = sm["flat_pp"]
+    ov = sm["overall"]
+    tgl = sm["as_of"].strftime("%d %b")
+    kem = sm["kemarin"].strftime("%d %b")
+    lalu = f"{sm['prev_start'].strftime('%d')}-{sm['prev_end'].strftime('%d %b')}"
+
+    def arah(dv, th=0.1):
+        return "naik" if dv > th else ("turun" if dv < -th else "relatif stabil")
+
+    def gerak(dv, th=0.1):
+        """'naik 1,4 poin' / 'turun 2,7 poin' / 'relatif stabil (+0,0 poin)'"""
+        a = arah(dv, th)
+        return f"{a} {fmt_num(abs(dv), 1, short=False)} poin" if a != "relatif stabil" else f"{a} ({fmt_pp(dv)})"
+
+    out = []
+    dod = ov["hari"] - ov["kemarin"] if not (pd.isna(ov["hari"]) or pd.isna(ov["kemarin"])) else float("nan")
+    mtd = ov["mtd"] - ov["mtd_lalu"] if not (pd.isna(ov["mtd"]) or pd.isna(ov["mtd_lalu"])) else float("nan")
+
+    ref = mtd if not pd.isna(mtd) else dod
+    if pd.isna(ref):
+        out.append("**Kesimpulan:** belum ada pembanding yang cukup untuk menilai growth %OTD.")
+    else:
+        verdict = {"naik": "membaik", "turun": "memburuk", "relatif stabil": "relatif stabil"}[arah(ref)]
+        basis = "MTD vs bulan lalu" if not pd.isna(mtd) else "harian vs kemarin"
+        out.append(f"**Kesimpulan:** %OTD MDS secara keseluruhan **{verdict}** ({basis}).")
+
+    if pd.isna(ov["hari"]):
+        out.append(f"- Harian: belum ada data SLA pada {tgl}.")
+    elif pd.isna(dod):
+        out.append(f"- Harian: %OTD {tgl} = {fmt_pct(ov['hari'])} (tidak ada data pembanding {kem}).")
+    else:
+        out.append(f"- Harian: %OTD {tgl} = {fmt_pct(ov['hari'])}, {gerak(dod)} "
+                   f"dibanding {kem} ({fmt_pct(ov['kemarin'])}).")
+    if pd.isna(ov["mtd"]):
+        out.append("- MTD: belum ada data SLA bulan ini.")
+    elif pd.isna(mtd):
+        out.append(f"- MTD: %OTD = {fmt_pct(ov['mtd'])} (riwayat SLA bulan lalu belum tersimpan, "
+                   "jadi growth MTD belum bisa dihitung).")
+    else:
+        out.append(f"- MTD: %OTD = {fmt_pct(ov['mtd'])}, {gerak(mtd)} "
+                   f"dibanding bulan lalu rentang sama {lalu} ({fmt_pct(ov['mtd_lalu'])}).")
+
+    def toko_line(label, t):
+        if t.empty:
+            return None
+        naik, turun = int((t["selisih"] > fl).sum()), int((t["selisih"] < -fl).sum())
+        stabil = len(t) - naik - turun
+        txt = f"- Per toko ({label}, {len(t)} toko): {naik} naik, {turun} turun, {stabil} stabil (batas ±{fmt_num(fl, 1, short=False)} poin)."
+        top, bot = t.iloc[0], t.iloc[-1]
+        if top["selisih"] > fl:
+            txt += f" Naik terbesar: {top['NAMA_STORE']} ({fmt_pp(top['selisih'])})."
+        if bot["selisih"] < -fl:
+            txt += f" Turun terbesar: {bot['NAMA_STORE']} ({fmt_pp(bot['selisih'])})."
+        return txt
+
+    for label, key in (("harian", "toko_dod"), ("MTD", "toko_mtd")):
+        ln = toko_line(label, sm[key])
+        if ln:
+            out.append(ln)
+    return "\n".join(out)
 
 
 def styled(df, int_cols=(), pct_cols=(), pct_dec=1):
@@ -225,7 +342,7 @@ def page_ds():
     st.subheader("Tren Sales harian")
     trend_src = view if use_all else view[~view["TANGGAL"].dt.normalize().isin(bad_dates)]
     trend = trend_src.groupby(trend_src["TANGGAL"].dt.normalize())["SALES"].sum()
-    st.line_chart(trend)
+    chart_short(trend)
 
     st.subheader("Performa per toko")
     if not has_previous_month(hist, as_of):
@@ -241,10 +358,10 @@ def page_ds():
     left, right = st.columns(2)
     with left:
         st.subheader("5 toko Sales MTD tertinggi")
-        st.bar_chart(g.nlargest(5, "MTD").set_index("NAMA_STORE")["MTD"])
+        chart_short(g.nlargest(5, "MTD").set_index("NAMA_STORE")["MTD"], "bar")
     with right:
         st.subheader("5 toko Sales MTD terendah")
-        st.bar_chart(g.nsmallest(5, "MTD").set_index("NAMA_STORE")["MTD"])
+        chart_short(g.nsmallest(5, "MTD").set_index("NAMA_STORE")["MTD"], "bar")
 
     if oos is not None and not oos.empty:
         st.subheader("OOS periode terbaru")
@@ -406,12 +523,12 @@ def page_mds():
     a, b = st.columns(2)
     with a:
         st.caption("Total Sales")
-        st.line_chart(ts.groupby(day)["SALES"].sum())
+        chart_short(ts.groupby(day)["SALES"].sum())
         st.caption("Rata-rata STD")
         st.line_chart(ts.groupby(day)["STD"].mean())
     with b:
         st.caption("Rata-rata SPD")
-        st.line_chart(ts.groupby(day)["SPD"].mean())
+        chart_short(ts.groupby(day)["SPD"].mean())
         st.caption("Rata-rata APC")
         st.line_chart(ts.groupby(day)["APC"].mean())
 
@@ -420,6 +537,7 @@ def page_mds():
         sl = mds_sla if not cabang else mds_sla[mds_sla["NAMA_BRANCH"].isin(cabang)]
         sl = apply_search(sl, q)
         st.subheader("OTD dan LATE")
+        st.markdown(otd_conclusion(otd_growth_summary(sl, as_of)))
         daily = sl.groupby(sl["TANGGAL"].dt.normalize())[
             ["DELIVERY_ONTIME", "DELIVERY_LATE", "JUMLAH_DELIVERY"]].sum()
         trend = pd.DataFrame({
@@ -574,11 +692,11 @@ def page_compare():
     a, b = st.columns(2)
     with a:
         st.caption("Sales MTD")
-        st.bar_chart(tab.set_index("Toko")["MTD"])
+        chart_short(tab.set_index("Toko")["MTD"], "bar")
     with b:
         if "SPD MTD" in tab.columns:
             st.caption("Rata-rata SPD MTD")
-            st.bar_chart(tab.set_index("Toko")["SPD MTD"])
+            chart_short(tab.set_index("Toko")["SPD MTD"], "bar")
 
 
 # ---------------------------------------------------------------- navbar
