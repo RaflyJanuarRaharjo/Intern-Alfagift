@@ -109,10 +109,20 @@ def fmt_pp(v, d=1):
     return f"{'+' if v > 0 else ''}{fmt_num(v, d, short=False)} poin"
 
 
-_AXIS_SHORT = ("datum.value >= 1e12 ? replace(format(datum.value/1e12, '.2~f'), '.', ',') + ' T' : "
-               "datum.value >= 1e9 ? replace(format(datum.value/1e9, '.2~f'), '.', ',') + ' M' : "
-               "datum.value >= 1e6 ? replace(format(datum.value/1e6, '.2~f'), '.', ',') + ' jt' : "
-               "format(datum.value, ',.0f')")
+def _short_expr(f):
+    """Ekspresi Vega: angka -> '3,99 jt' / '90,41 M' / '1,23 T' (mulai 1 juta), selain itu '12.345'.
+    Sama dengan fmt_num() di Python (termasuk promosi 999,999 jt -> 1,00 M)."""
+    def unit(div, suf):
+        return f"replace(format({f}/{div}, '.2f'), '.', ',') + ' {suf}'"
+
+    def id_fmt(spec):
+        return (f"replace(replace(replace(format({f}, '{spec}'), regexp(',', 'g'), 'X'), '.', ','), "
+                f"regexp('X', 'g'), '.')")
+    return (f"abs({f}) >= 999.995e9 ? {unit('1e12', 'T')} : abs({f}) >= 999.995e6 ? {unit('1e9', 'M')} : "
+            f"abs({f}) >= 1e6 ? {unit('1e6', 'jt')} : abs({f}) >= 1000 ? {id_fmt(',.0f')} : {id_fmt(',.2~f')}")
+
+
+_AXIS_SHORT = _short_expr("datum.value")
 
 
 def chart_short(data, kind="line"):
@@ -127,10 +137,10 @@ def chart_short(data, kind="line"):
         x = alt.X(f"{idx}:T" if is_time else f"{idx}:N", title=None, **({} if is_time else {"sort": None}))
         y = alt.Y("nilai:Q", title=None, axis=alt.Axis(labelExpr=_AXIS_SHORT))
         enc = dict(x=x, y=y, tooltip=[alt.Tooltip(f"{idx}", title="Tanggal/Toko"), "seri",
-                                      alt.Tooltip("nilai:Q", format=",.0f", title="Nilai")])
+                                      alt.Tooltip("teks:N", title="Nilai")])
         if long["seri"].nunique() > 1:
             enc["color"] = alt.Color("seri:N", title=None)
-        base = alt.Chart(long)
+        base = alt.Chart(long).transform_calculate(teks=_short_expr("datum.nilai"))
         chart = (base.mark_line() if kind == "line" else base.mark_bar()).encode(**enc)
         st.altair_chart(chart, use_container_width=True)
     except Exception:  # noqa: BLE001
@@ -626,7 +636,7 @@ def page_compare():
     if col in ("PERCENT_GM", "PCT_OOS_OFMB"):
         tr = tr * 100
     st.subheader(f"Tren {metric}")
-    st.line_chart(tr)
+    chart_short(tr)
 
     # ---- tabel perbandingan
     g = compute_growth(sub, as_of)
